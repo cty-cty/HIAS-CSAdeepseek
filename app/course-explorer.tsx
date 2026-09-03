@@ -1680,7 +1680,7 @@ export default function CourseExplorer({
             </div>
 
             {filteredCourses.length ? (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                 {filteredCourses.slice(0, visibleCount).map((course) => {
                   const selected = selectedIds.includes(course.id);
                   const conflict = selected && conflictingIds.has(course.id);
@@ -1692,18 +1692,12 @@ export default function CourseExplorer({
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="mb-2 flex flex-wrap gap-1.5">
+                          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                             <Badge
                               className="bg-blue-50 text-blue-700"
                               variant="secondary"
                             >
                               {course.category}
-                            </Badge>
-                            <Badge
-                              className="bg-emerald-50 text-emerald-700"
-                              variant="secondary"
-                            >
-                              {course.level}
                             </Badge>
                             {activePlan.coreCourses.includes(course.name) && (
                               <Badge
@@ -1723,23 +1717,6 @@ export default function CourseExplorer({
                                 方案专业课
                               </Badge>
                             )}
-                            <Badge
-                              className="bg-slate-100 text-slate-600"
-                              variant="secondary"
-                            >
-                              {formatCredits(course.credits)} 学分
-                            </Badge>
-                            <Badge className="source-badge" variant="secondary">
-                              <FileSpreadsheet /> 秋季课表
-                            </Badge>
-                            {conflict && (
-                              <Badge
-                                className="bg-rose-50 text-rose-700"
-                                variant="secondary"
-                              >
-                                时间冲突
-                              </Badge>
-                            )}
                           </div>
                           <button
                             className="course-title text-left font-bold tracking-tight text-slate-900 hover:text-blue-700"
@@ -1748,8 +1725,12 @@ export default function CourseExplorer({
                           >
                             {course.name}
                           </button>
-                          <p className="mt-1 line-clamp-1 text-xs text-slate-400">
-                            {course.englishName || course.code}
+                          <p className="course-subtitle">
+                            <span>{course.englishName || course.code}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>{formatCredits(course.credits)} 学分</span>
+                            <span aria-hidden="true">·</span>
+                            <span>{course.level}</span>
                           </p>
                         </div>
                         <button
@@ -1783,13 +1764,12 @@ export default function CourseExplorer({
                           </span>
                         </div>
                       </div>
-                      <div className="course-extra mt-4">
+                      <div className="course-meta-line">
                         <span>
                           <ClipboardCheck /> {course.examMode || '考试方式待定'}
                         </span>
                         <span>
-                          <Presentation />{' '}
-                          {course.teachingMode || '授课方式待定'}
+                          <Presentation /> {course.teachingMode || '授课方式待定'}
                         </span>
                         <span>
                           <Clock3 /> {course.hours || '学时待定'}
@@ -1804,10 +1784,10 @@ export default function CourseExplorer({
                           </span>
                         </div>
                       )}
-                      <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs leading-5">
+                      <div className="mt-3.5 rounded-xl bg-slate-50 p-3 text-xs leading-5">
                         <ScheduleLines schedules={course.schedules} />
                       </div>
-                      <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
+                      <div className="mt-3.5 flex items-center justify-between text-xs text-slate-500">
                         <span className="font-mono">{course.code}</span>
                         <span>
                           余量 {Math.max(0, course.capacity - course.enrolled)}{' '}
