@@ -1461,3 +1461,187 @@ button {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ===== 视觉打磨：动效 / 焦点 / 空状态 / 质感 ===== */
+
+::selection {
+  background: rgba(96, 165, 250, 0.3);
+}
+
+/* Hero 装饰图形缓慢呼吸（纯透明渐变，不触发布局） */
+.hero-doodle {
+  animation: doodle-breathe 9s ease-in-out infinite;
+}
+
+.hero-doodle-two {
+  animation-duration: 13s;
+  animation-delay: -5s;
+}
+
+@keyframes doodle-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes star-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.32) rotate(-8deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 统一按键过渡与按压反馈 */
+  button:not(:disabled) {
+    transition:
+      transform 120ms ease,
+      border-color 150ms ease,
+      background-color 150ms ease,
+      color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  button:not(:disabled):active {
+    transform: scale(0.965);
+  }
+
+  .star-button-selected svg {
+    animation: star-pop 260ms ease-out;
+  }
+
+  .timetable-course {
+    transition:
+      filter 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  .timetable-course:hover {
+    filter: brightness(0.965);
+  }
+
+  .view-tab:hover {
+    color: #1d4ed8;
+  }
+
+  /* 新出现的关键区块轻微上浮入场 */
+  .conflict-panel,
+  .empty-state {
+    animation: rise-in 240ms ease-out both;
+  }
+}
+
+/* 可访问性：自定义按钮统一键盘焦点环（shadcn 组件自带焦点样式） */
+button:not([data-slot]):focus-visible,
+[role='button']:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(56, 132, 255, 0.85);
+  outline-offset: 2px;
+}
+
+/* 空状态插画：柔和渐变贴片 + 虚线外框 */
+.empty-state {
+  position: relative;
+}
+
+.empty-state::before {
+  content: '';
+  position: absolute;
+  inset: auto -80px -80px auto;
+  width: 230px;
+  height: 230px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(110, 150, 220, 0.08),
+    transparent 68%
+  );
+  pointer-events: none;
+}
+
+.empty-art {
+  position: relative;
+  display: grid;
+  width: 80px;
+  height: 80px;
+  place-items: center;
+  border-radius: 26px;
+  color: #547fc0;
+  background: radial-gradient(
+    circle at 30% 25%,
+    #ffffff,
+    #eaf2fd 70%,
+    #dbe9fb
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(109, 145, 214, 0.18),
+    0 14px 26px -12px rgba(70, 110, 190, 0.32);
+  transform: rotate(-3deg);
+}
+
+.empty-art svg {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
+.empty-art::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border: 1.5px dashed rgba(120, 160, 230, 0.35);
+  border-radius: 30px;
+}
+
+.empty-art-emerald {
+  color: #3d8a6f;
+  background: radial-gradient(
+    circle at 30% 25%,
+    #ffffff,
+    #e8f7f0 70%,
+    #d8f1e6
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(90, 160, 130, 0.2),
+    0 14px 26px -12px rgba(60, 150, 110, 0.32);
+}
+
+.empty-art-emerald::after {
+  border-color: rgba(110, 185, 155, 0.4);
+}
+
+.empty-art-amber {
+  color: #b07a2e;
+  background: radial-gradient(
+    circle at 30% 25%,
+    #ffffff,
+    #fdf3e0 70%,
+    #fae9c8
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 155, 80, 0.22),
+    0 14px 26px -12px rgba(190, 140, 60, 0.32);
+}
+
+.empty-art-amber::after {
+  border-color: rgba(215, 175, 105, 0.45);
+}

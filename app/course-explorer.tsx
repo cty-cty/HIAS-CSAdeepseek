@@ -14,6 +14,7 @@ import {
   CalendarDays,
   ClipboardList,
   ChevronDown,
+  ChevronUp,
   ClipboardCheck,
   Clock3,
   Download,
@@ -416,6 +417,24 @@ export default function CourseExplorer({
     if (!storageReady) return;
     persistToStorage(EARNED_CREDITS_STORAGE_KEY, earnedCredits);
   }, [earnedCredits, persistToStorage, storageReady]);
+
+  const [showBackTop, setShowBackTop] = useState(false);
+  const backTopShownRef = useRef(false);
+  useEffect(() => {
+    const onScroll = () => {
+      const shown = window.scrollY > 560;
+      if (shown !== backTopShownRef.current) {
+        backTopShownRef.current = shown;
+        setShowBackTop(shown);
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   const setSelectedIdsForActive = useCallback(
     (next: string[] | ((current: string[]) => string[])) => {
@@ -1154,7 +1173,7 @@ export default function CourseExplorer({
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#f7f7f2] text-slate-900">
+    <main className="min-h-screen overflow-x-clip bg-[#f7f7f2] text-slate-900">
       <div className="mx-auto max-w-[1380px] px-3 py-4 sm:px-5 lg:px-7">
         <section className="hero-panel relative overflow-hidden rounded-[26px] border border-[#dce5de] px-5 py-6 shadow-[0_22px_65px_rgba(61,83,72,.10)] sm:px-8 sm:py-7">
           <div className="hero-doodle hero-doodle-one" />
@@ -1241,7 +1260,7 @@ export default function CourseExplorer({
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
                       <div
-                        className="h-full rounded-full bg-emerald-300"
+                        className="h-full rounded-full bg-emerald-300 transition-[width] duration-700 ease-out"
                         style={{
                           width: `${Math.min(
                             100,
@@ -1486,80 +1505,6 @@ export default function CourseExplorer({
             </Button>
           </div>
 
-          <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                className={
-                  onlySelected
-                    ? 'filter-chip filter-chip-active'
-                    : 'filter-chip'
-                }
-                onClick={() => setOnlySelected((value) => !value)}
-                variant="outline"
-              >
-                <Star className={onlySelected ? 'fill-current' : ''} /> 仅看已选
-              </Button>
-              <Button
-                className={
-                  onlyNoConflict
-                    ? 'filter-chip filter-chip-active'
-                    : 'filter-chip'
-                }
-                onClick={() => setOnlyNoConflict((value) => !value)}
-                variant="outline"
-              >
-                <Zap /> 不与已选冲突
-              </Button>
-              {conflictingIds.size > 0 && (
-                <Badge
-                  className="h-8 rounded-lg bg-rose-50 px-3 text-rose-700"
-                  variant="secondary"
-                >
-                  {conflictPairs.length} 组课程冲突
-                </Badge>
-              )}
-            </div>
-            <div className="flex w-full flex-wrap items-center gap-2.5 md:w-auto md:justify-end">
-              <div className="selection-credit-pill" aria-live="polite">
-                <Sparkles />
-                <span>已选总计</span>
-                <strong>{formatCredits(selectedCredits)}</strong>
-                <b>学分</b>
-                <small>{selectedCourses.length} 门课</small>
-              </div>
-              <div className="grid w-full grid-cols-2 rounded-xl bg-slate-100 p-1 sm:w-auto sm:flex">
-                <button
-                  className={`view-tab ${view === 'courses' ? 'view-tab-active' : ''}`}
-                  onClick={() => setView('courses')}
-                  type="button"
-                >
-                  <BookOpen /> 课程列表
-                </button>
-                <button
-                  className={`view-tab ${view === 'guide' ? 'view-tab-active' : ''}`}
-                  onClick={() => setView('guide')}
-                  type="button"
-                >
-                  <ClipboardList /> 培养要求
-                </button>
-                <button
-                  className={`view-tab ${view === 'exams' ? 'view-tab-active' : ''}`}
-                  onClick={() => setView('exams')}
-                  type="button"
-                >
-                  <BarChart3 /> 考试压力
-                </button>
-                <button
-                  className={`view-tab ${view === 'timetable' ? 'view-tab-active' : ''}`}
-                  onClick={() => setView('timetable')}
-                  type="button"
-                >
-                  <CalendarDays /> 模拟课表
-                </button>
-              </div>
-            </div>
-          </div>
-
           {conflictPairs.length > 0 && (
             <div className="conflict-panel mt-4" role="alert">
               <div className="conflict-panel-title">
@@ -1646,6 +1591,80 @@ export default function CourseExplorer({
             </div>
           )}
         </section>
+
+        <div className="sticky top-2 z-40 mb-1 flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/90 p-2.5 shadow-[0_10px_30px_rgba(20,48,88,0.07)] backdrop-blur-md md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              className={
+                onlySelected
+                  ? 'filter-chip filter-chip-active'
+                  : 'filter-chip'
+              }
+              onClick={() => setOnlySelected((value) => !value)}
+              variant="outline"
+            >
+              <Star className={onlySelected ? 'fill-current' : ''} /> 仅看已选
+            </Button>
+            <Button
+              className={
+                onlyNoConflict
+                  ? 'filter-chip filter-chip-active'
+                  : 'filter-chip'
+              }
+              onClick={() => setOnlyNoConflict((value) => !value)}
+              variant="outline"
+            >
+              <Zap /> 不与已选冲突
+            </Button>
+            {conflictingIds.size > 0 && (
+              <Badge
+                className="h-8 rounded-lg bg-rose-50 px-3 text-rose-700"
+                variant="secondary"
+              >
+                {conflictPairs.length} 组课程冲突
+              </Badge>
+            )}
+          </div>
+          <div className="flex w-full flex-wrap items-center gap-2.5 md:w-auto md:justify-end">
+            <div className="selection-credit-pill" aria-live="polite">
+              <Sparkles />
+              <span>已选总计</span>
+              <strong>{formatCredits(selectedCredits)}</strong>
+              <b>学分</b>
+              <small>{selectedCourses.length} 门课</small>
+            </div>
+            <div className="grid w-full grid-cols-2 rounded-xl bg-slate-100 p-1 sm:w-auto sm:flex">
+              <button
+                className={`view-tab ${view === 'courses' ? 'view-tab-active' : ''}`}
+                onClick={() => setView('courses')}
+                type="button"
+              >
+                <BookOpen /> 课程列表
+              </button>
+              <button
+                className={`view-tab ${view === 'guide' ? 'view-tab-active' : ''}`}
+                onClick={() => setView('guide')}
+                type="button"
+              >
+                <ClipboardList /> 培养要求
+              </button>
+              <button
+                className={`view-tab ${view === 'exams' ? 'view-tab-active' : ''}`}
+                onClick={() => setView('exams')}
+                type="button"
+              >
+                <BarChart3 /> 考试压力
+              </button>
+              <button
+                className={`view-tab ${view === 'timetable' ? 'view-tab-active' : ''}`}
+                onClick={() => setView('timetable')}
+                type="button"
+              >
+                <CalendarDays /> 模拟课表
+              </button>
+            </div>
+          </div>
+        </div>
 
         {view === 'courses' ? (
           <section className="py-6">
@@ -1801,7 +1820,9 @@ export default function CourseExplorer({
               </div>
             ) : (
               <div className="empty-state">
-                <SlidersHorizontal />
+                <div className="empty-art empty-art-blue">
+                  <SlidersHorizontal />
+                </div>
                 <h3>没有找到匹配课程</h3>
                 <p>试试缩短关键词，或清空部分筛选条件。</p>
                 <Button onClick={clearFilters} variant="outline">
@@ -2310,7 +2331,9 @@ export default function CourseExplorer({
               </div>
             ) : (
               <div className="empty-state mt-5">
-                <BarChart3 />
+                <div className="empty-art empty-art-amber">
+                  <BarChart3 />
+                </div>
                 <h3>还没有可分析的课程</h3>
                 <p>先选择课程，再回来查看闭卷、开卷、报告和实践考核的分布。</p>
                 <Button onClick={() => setView('courses')}>去选择课程</Button>
@@ -2437,7 +2460,9 @@ export default function CourseExplorer({
               </div>
             ) : (
               <div className="empty-state">
-                <CalendarDays />
+                <div className="empty-art empty-art-emerald">
+                  <CalendarDays />
+                </div>
                 <h3>课表还是空的</h3>
                 <p>回到课程列表，点击课程卡片右上角的星标即可加入。</p>
                 <Button onClick={() => setView('courses')}>去选择课程</Button>
@@ -2470,6 +2495,19 @@ export default function CourseExplorer({
           <span>HIAS-CSAdeepseek · Course Selection Assistant</span>
         </footer>
       </div>
+
+      <button
+        aria-label="回到顶部"
+        className={`fixed bottom-6 right-5 z-50 grid h-11 w-11 place-items-center rounded-full border border-slate-200 bg-white/95 text-slate-500 shadow-[0_10px_26px_rgba(20,48,88,0.18)] backdrop-blur transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:text-blue-700 hover:shadow-[0_14px_30px_rgba(20,48,88,0.22)] ${
+          showBackTop
+            ? 'translate-y-0 opacity-100'
+            : 'pointer-events-none translate-y-3 opacity-0'
+        }`}
+        onClick={scrollToTop}
+        type="button"
+      >
+        <ChevronUp className="size-5" />
+      </button>
 
       <Sheet
         onOpenChange={(open) => {
