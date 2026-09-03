@@ -150,7 +150,8 @@ export function getConflictSlots(
 }
 
 export function courseBaseName(name: string) {
-  return name.replace(/[-—－]?\d+班$/, '');
+  // 剥离分班/分节编号，如 “-01班”“-12班”，包括 “英语A-01班-学术读写” 这类中间班次。
+  return name.replace(/[-—－]?\d+班(?=[-—－]|$)/g, '');
 }
 
 export function formatWeekRanges(weeks: number[]) {

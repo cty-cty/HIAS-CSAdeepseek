@@ -1015,6 +1015,11 @@ export default function CourseExplorer({
       selectedCourses.map((course) => courseBaseName(course.name)),
     );
     const blockedCourses = [...selectedCourses];
+    // 专业学位课只允许推荐当前培养方向课程库中的课程（如光电信息工程仅推光电的课程）。
+    const degreeLibrary = new Set<string>([
+      ...activePlan.coreCourses,
+      ...activePlan.professionalCourses,
+    ]);
     const coveredByGap = new Map<string, number>();
     const openIds = new Set(gaps.map((gap) => gap.id));
     let guard = 0;
@@ -1030,6 +1035,9 @@ export default function CourseExplorer({
             return false;
           }
           if (bucketOfCourse(course) !== gap.id) return false;
+          if (gap.id === 'degree' && !degreeLibrary.has(course.name)) {
+            return false;
+          }
           return !blockedCourses.some((blocked) =>
             coursesConflict(course, blocked),
           );
@@ -1062,6 +1070,7 @@ export default function CourseExplorer({
       }));
     return { rows: rows.slice(0, 10), unsatisfied };
   }, [
+    activePlan,
     bucketOfCourse,
     englishExemption,
     initialCourses,

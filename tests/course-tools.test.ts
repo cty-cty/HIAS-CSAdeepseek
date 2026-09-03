@@ -136,10 +136,13 @@ test('formatConflictSlot: 单节与多节的文案', () => {
   );
 });
 
-test('courseBaseName: 去掉分班后缀', () => {
+test('courseBaseName: 去掉分班后缀（含中间班次）', () => {
   assert.equal(courseBaseName('高等数学-01班'), '高等数学');
   assert.equal(courseBaseName('健身气功《八段锦》-02班'), '健身气功《八段锦》');
   assert.equal(courseBaseName('学术道德与学术写作规范1班'), '学术道德与学术写作规范');
+  assert.equal(courseBaseName('英语A-01班-学术读写'), '英语A-学术读写');
+  assert.equal(courseBaseName('英语A-03班-学术读写'), '英语A-学术读写');
+  assert.equal(courseBaseName('高级英语口语（1）-02班'), '高级英语口语（1）');
   assert.equal(courseBaseName('量子场论'), '量子场论');
 });
 
