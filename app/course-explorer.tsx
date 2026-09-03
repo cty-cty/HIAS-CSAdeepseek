@@ -276,7 +276,7 @@ export default function CourseExplorer({
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
   const [view, setView] = useState<
     'courses' | 'guide' | 'notice' | 'exams' | 'timetable'
-  >('courses');
+  >('guide');
   const [programPlanId, setProgramPlanId] = useState('optical-master');
   const [week, setWeek] = useState(2);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -1788,18 +1788,18 @@ export default function CourseExplorer({
             </div>
             <div className="grid w-full grid-cols-2 rounded-xl bg-slate-100 p-1 sm:w-auto sm:flex">
               <button
-                className={`view-tab ${view === 'courses' ? 'view-tab-active' : ''}`}
-                onClick={() => setView('courses')}
-                type="button"
-              >
-                <BookOpen /> 课程列表
-              </button>
-              <button
                 className={`view-tab ${view === 'guide' ? 'view-tab-active' : ''}`}
                 onClick={() => setView('guide')}
                 type="button"
               >
                 <ClipboardList /> 培养要求
+              </button>
+              <button
+                className={`view-tab ${view === 'courses' ? 'view-tab-active' : ''}`}
+                onClick={() => setView('courses')}
+                type="button"
+              >
+                <BookOpen /> 课程列表
               </button>
               <button
                 className={`view-tab ${view === 'notice' ? 'view-tab-active' : ''}`}
