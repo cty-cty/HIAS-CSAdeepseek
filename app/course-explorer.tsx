@@ -31,10 +31,34 @@ import {
   Star,
   Target,
   Trash2,
+  Upload,
   Users,
   X,
   Zap,
 } from 'lucide-react';
+
+import {
+  type ConflictSlot,
+  type Course,
+  type CourseDataset,
+  type RequirementBucketId,
+  type Schedule,
+  categorizeRequirement,
+  courseBaseName,
+  courseColorIndex,
+  courseConflictsInWeek,
+  coursesConflict,
+  COURSE_CATEGORY_ORDER,
+  csvCell,
+  formatConflictSlot,
+  formatCredits,
+  getConflictSlots,
+  isCourse,
+  parseBackupPayload,
+  parseCourseDataset,
+  parseEarnedImport,
+  templateWeekText,
+} from '@/lib/course-tools';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -52,43 +76,6 @@ import {
 } from '@/components/ui/sheet';
 import { PROGRAM_PLANS } from '@/app/program-plans';
 
-type Schedule = {
-  day: string;
-  dayIndex: number;
-  start: number;
-  end: number;
-  weeks: number[];
-  weeksText: string;
-  periodText: string;
-  room: string;
-};
-
-type Course = {
-  id: string;
-  code: string;
-  name: string;
-  englishName: string;
-  college: string;
-  category: string;
-  level: string;
-  subject: string;
-  hours: string;
-  credits: number;
-  capacity: number;
-  enrolled: number;
-  teachingMode: string;
-  examMode: string;
-  teacher: string;
-  schedules: Schedule[];
-};
-
-type CourseDataset = {
-  id: string;
-  label: string;
-  courses: Course[];
-  updatedAt: string;
-};
-
 const DEFAULT_TERM_ID = '2026-fall';
 const DEFAULT_TERM_LABEL = '2026 秋季';
 const COURSE_DATASETS_STORAGE_KEY = 'hias-course-datasets-v1';
@@ -97,13 +84,6 @@ const SELECTED_BY_TERM_STORAGE_KEY = 'hias-selected-by-term-v1';
 const LEGACY_SELECTED_STORAGE_KEY = 'ucas-hangzhou-selected';
 const EARNED_CREDITS_STORAGE_KEY = 'hias-earned-credits-v1';
 const EMPTY_SELECTED_IDS: string[] = [];
-
-type ConflictSlot = {
-  day: string;
-  start: number;
-  end: number;
-  weeks: number[];
-};
 
 type ConflictPair = {
   left: Course;
@@ -180,144 +160,12 @@ const COURSE_COLORS = [
   ['#f3dfe9', '#9c4b72'],
 ];
 
-function intersects<T>(left: T[], right: T[]) {
-  const lookup = new Set(left);
-  return right.some((item) => lookup.has(item));
-}
-
-function schedulesConflict(left: Schedule, right: Schedule) {
-  return (
-    left.dayIndex === right.dayIndex &&
-    left.start <= right.end &&
-    right.start <= left.end &&
-    intersects(left.weeks, right.weeks)
-  );
-}
-
-function coursesConflict(left: Course, right: Course) {
-  return left.schedules.some((a) =>
-    right.schedules.some((b) => schedulesConflict(a, b)),
-  );
-}
-
-function courseBaseName(name: string) {
-  return name.replace(/[-—－]?\d+班$/, '');
-}
-
 function getExamBucket(examMode: string): ExamBucketId {
   if (/闭卷/.test(examMode)) return 'closed';
   if (/开卷/.test(examMode)) return 'open';
   if (/报告|论文|综述|汇报|大作业/.test(examMode)) return 'report';
   if (/实践|技能|实验|设计|作品|答辩/.test(examMode)) return 'practical';
   return 'other';
-}
-
-function courseConflictsInWeek(left: Course, right: Course, week: number) {
-  return left.schedules.some((a) =>
-    right.schedules.some(
-      (b) =>
-        a.dayIndex === b.dayIndex &&
-        a.start <= b.end &&
-        b.start <= a.end &&
-        a.weeks.includes(week) &&
-        b.weeks.includes(week),
-    ),
-  );
-}
-
-function getConflictSlots(left: Course, right: Course) {
-  const slots: ConflictSlot[] = [];
-  left.schedules.forEach((a) => {
-    right.schedules.forEach((b) => {
-      if (!schedulesConflict(a, b)) return;
-      const weeks = a.weeks.filter((item) => b.weeks.includes(item));
-      slots.push({
-        day: a.day,
-        start: Math.max(a.start, b.start),
-        end: Math.min(a.end, b.end),
-        weeks,
-      });
-    });
-  });
-  return slots;
-}
-
-function formatWeekRanges(weeks: number[]) {
-  if (!weeks.length) return '周次待定';
-  const sorted = [...new Set(weeks)].sort((a, b) => a - b);
-  const ranges: string[] = [];
-  let start = sorted[0];
-  let previous = sorted[0];
-  for (let index = 1; index <= sorted.length; index += 1) {
-    const current = sorted[index];
-    if (current === previous + 1) {
-      previous = current;
-      continue;
-    }
-    ranges.push(start === previous ? String(start) : `${start}-${previous}`);
-    start = current;
-    previous = current;
-  }
-  return `第${ranges.join('、')}周`;
-}
-
-function formatConflictSlot(slot: ConflictSlot) {
-  const periods =
-    slot.start === slot.end
-      ? `第${slot.start}节`
-      : `第${slot.start}-${slot.end}节`;
-  return `${slot.day} ${periods} · ${formatWeekRanges(slot.weeks)}`;
-}
-
-function formatCredits(value: number) {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function csvCell(value: string | number) {
-  return `"${String(value).replaceAll('"', '""')}"`;
-}
-
-function templateWeekText(schedule: Schedule) {
-  return schedule.weeksText
-    .trim()
-    .replace(/^第/, '')
-    .replace(/周$/, '')
-    .replaceAll(',', '、');
-}
-
-function isSchedule(value: unknown): value is Schedule {
-  if (!value || typeof value !== 'object') return false;
-  const schedule = value as Partial<Schedule>;
-  return (
-    typeof schedule.dayIndex === 'number' &&
-    typeof schedule.start === 'number' &&
-    typeof schedule.end === 'number' &&
-    Array.isArray(schedule.weeks) &&
-    schedule.weeks.every((week) => typeof week === 'number')
-  );
-}
-
-function isCourse(value: unknown): value is Course {
-  if (!value || typeof value !== 'object') return false;
-  const course = value as Partial<Course>;
-  return (
-    typeof course.id === 'string' &&
-    typeof course.code === 'string' &&
-    typeof course.name === 'string' &&
-    typeof course.credits === 'number' &&
-    Array.isArray(course.schedules) &&
-    course.schedules.every(isSchedule)
-  );
-}
-
-// Stable color index from a string id. `Number(id) % length` breaks when ids
-// are non-numeric (imported datasets), so hash the string instead.
-function courseColorIndex(id: string) {
-  let hash = 0;
-  for (let index = 0; index < id.length; index += 1) {
-    hash = (hash * 31 + id.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash) % COURSE_COLORS.length;
 }
 
 function safeSetItem(key: string, value: unknown) {
@@ -327,65 +175,6 @@ function safeSetItem(key: string, value: unknown) {
   } catch {
     return false;
   }
-}
-
-function termIdFromLabel(label: string) {
-  const normalized = label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return normalized || 'imported-' + Date.now();
-}
-
-function parseCourseDataset(text: string, fileName: string): CourseDataset {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error('数据文件不是有效的 JSON。请使用课程数据 courses.json。');
-  }
-
-  const isObject =
-    parsed && typeof parsed === 'object' && !Array.isArray(parsed);
-  const record = isObject ? (parsed as Record<string, unknown>) : null;
-  const rawCourses = Array.isArray(parsed) ? parsed : record?.courses;
-  if (!Array.isArray(rawCourses) || !rawCourses.length) {
-    throw new Error(
-      '没有找到课程数组。支持直接上传 courses.json，或上传包含 courses 字段的 JSON 文件。',
-    );
-  }
-  if (!rawCourses.every(isCourse)) {
-    const scheduleProblem = rawCourses.some(
-      (course) =>
-        course &&
-        typeof course === 'object' &&
-        Array.isArray((course as { schedules?: unknown }).schedules) &&
-        !(course as { schedules: unknown[] }).schedules.every(isSchedule),
-    );
-    throw new Error(
-      scheduleProblem
-        ? '部分课程的上课安排（schedules）结构不正确：每条安排需要包含数字类型的 dayIndex、start、end 和数字数组 weeks。'
-        : '课程数据字段不完整，至少需要 id、code、name、credits 和 schedules。',
-    );
-  }
-
-  const baseName = fileName.replace(/\.[^/.]+$/, '').trim();
-  const labelValue =
-    (typeof record?.label === 'string' && record.label.trim()) ||
-    (typeof record?.termLabel === 'string' && record.termLabel.trim()) ||
-    (typeof record?.term === 'string' && record.term.trim()) ||
-    baseName ||
-    '导入课程数据';
-  const idValue =
-    (typeof record?.termId === 'string' && record.termId.trim()) || labelValue;
-
-  return {
-    id: termIdFromLabel(idValue),
-    label: labelValue,
-    courses: rawCourses,
-    updatedAt: new Date().toISOString(),
-  };
 }
 
 function ScheduleLines({ schedules }: { schedules: Schedule[] }) {
@@ -409,14 +198,6 @@ function ScheduleLines({ schedules }: { schedules: Schedule[] }) {
   );
 }
 
-type RequirementBucketId =
-  | 'publicRequired'
-  | 'degree'
-  | 'professionalNonDegree'
-  | 'publicElective'
-  | 'innovation'
-  | 'other';
-
 type RequirementBucket = {
   id: RequirementBucketId;
   label: string;
@@ -427,93 +208,15 @@ type RequirementBucket = {
   nullText: string;
 };
 
-const DEGREE_CATEGORIES = ['专业核心课', '学科核心课', '专业课'];
-const NON_DEGREE_CATEGORIES = ['研讨课', '实验课'];
-const COURSE_CATEGORY_ORDER = [
-  '公共必修课',
-  '公共选修课',
-  '专业核心课',
-  '学科核心课',
-  '专业课',
-  '研讨课',
-  '实验课',
-  '创新创业课',
-];
+type PlanSuggestion = {
+  course: Course;
+  gapLabel: string;
+};
 
-function categorizeRequirement(category: string): RequirementBucketId {
-  if (category === '公共必修课') return 'publicRequired';
-  if (category === '公共选修课') return 'publicElective';
-  if (DEGREE_CATEGORIES.includes(category)) return 'degree';
-  if (NON_DEGREE_CATEGORIES.includes(category)) return 'professionalNonDegree';
-  if (category === '创新创业课') return 'innovation';
-  return 'other';
-}
-
-// Parse an "already earned" credits file. Accepts:
-//   - an array of course objects (needs `category` + positive `credits`),
-//   - `{ courses: [...] }` (e.g. a term dataset),
-//   - a plain `{ category: credits }` map.
-// Returns totals grouped by course category.
-function parseEarnedImport(text: string): Record<string, number> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(
-      '文件不是有效的 JSON。请提供已修课程数组、含 courses 字段的对象，或 {课程属性: 学分} 映射。',
-    );
-  }
-
-  const result: Record<string, number> = {};
-  const addCourse = (item: unknown): boolean => {
-    if (!item || typeof item !== 'object') return false;
-    const record = item as { category?: unknown; credits?: unknown };
-    if (typeof record.category !== 'string' || !record.category.trim()) {
-      return false;
-    }
-    if (
-      typeof record.credits !== 'number' ||
-      !Number.isFinite(record.credits) ||
-      record.credits <= 0
-    ) {
-      return false;
-    }
-    const category = record.category.trim();
-    result[category] = (result[category] ?? 0) + record.credits;
-    return true;
-  };
-
-  if (Array.isArray(parsed)) {
-    if (!parsed.some(addCourse)) {
-      throw new Error('数组中没有识别到带 category 与正数 credits 的已修课程。');
-    }
-  } else if (parsed && typeof parsed === 'object') {
-    const record = parsed as Record<string, unknown>;
-    if (Array.isArray(record.courses)) {
-      if (!record.courses.some(addCourse)) {
-        throw new Error('courses 中没有识别到带 category 与正数 credits 的已修课程。');
-      }
-    } else {
-      const entries = Object.entries(record).filter(
-        ([category, credits]) =>
-          category.trim() &&
-          typeof credits === 'number' &&
-          Number.isFinite(credits) &&
-          credits > 0,
-      );
-      if (!entries.length) {
-        throw new Error('对象既不是 {课程属性: 学分} 映射，也没有可用的 courses 数组。');
-      }
-      entries.forEach(([category, credits]) => {
-        result[category.trim()] =
-          (result[category.trim()] ?? 0) + (credits as number);
-      });
-    }
-  } else {
-    throw new Error('文件内容无法识别为已修学分数据。');
-  }
-  return result;
-}
+type PlanGap = {
+  label: string;
+  remaining: number;
+};
 
 export default function CourseExplorer({
   initialCourses: defaultCourses,
@@ -540,6 +243,7 @@ export default function CourseExplorer({
   const [earnedMessage, setEarnedMessage] = useState('');
   const [earnedError, setEarnedError] = useState('');
   const earnedFileRef = useRef<HTMLInputElement>(null);
+  const backupFileRef = useRef<HTMLInputElement>(null);
   const [onlySelected, setOnlySelected] = useState(false);
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
   const [view, setView] = useState<'courses' | 'guide' | 'exams' | 'timetable'>(
@@ -840,6 +544,75 @@ export default function CourseExplorer({
     setEarnedError('');
   }
 
+  function exportBackup() {
+    const payload = {
+      app: 'hias-csadeepseek',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      activeTermId,
+      selectedByTerm,
+      earnedCredits,
+      customDatasets,
+    };
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(payload, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      }),
+    );
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `HIAS-CSAdeepseek-数据备份-${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleBackupRestore(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setDataError('');
+    setDataMessage('');
+    setEarnedError('');
+    setEarnedMessage('');
+    try {
+      const backup = parseBackupPayload(await file.text());
+      const selectedCount = Object.values(backup.selectedByTerm).reduce(
+        (sum, ids) => sum + ids.length,
+        0,
+      );
+      const earnedSum = Object.values(backup.earnedCredits).reduce(
+        (sum, credits) => sum + credits,
+        0,
+      );
+      const confirmed = window.confirm(
+        `备份内容：${backup.customDatasets.length} 套学期数据、${selectedCount} 门已选课程、${formatCredits(earnedSum)} 已修学分。恢复将覆盖当前浏览器中的全部本地数据，确定继续吗？`,
+      );
+      if (!confirmed) return;
+      const nextActiveTerm =
+        backup.activeTermId !== null &&
+        (backup.activeTermId === DEFAULT_TERM_ID ||
+          backup.customDatasets.some(
+            (dataset) => dataset.id === backup.activeTermId,
+          ))
+          ? backup.activeTermId
+          : DEFAULT_TERM_ID;
+      setCustomDatasets(backup.customDatasets);
+      setActiveTermId(nextActiveTerm);
+      setSelectedByTerm(backup.selectedByTerm);
+      setEarnedCredits(backup.earnedCredits);
+      clearFilters();
+      setDetailCourse(null);
+      setDataMessage('备份已恢复：学期数据、选课记录与已修学分均已更新。');
+    } catch (error) {
+      setDataError(
+        error instanceof Error ? error.message : '备份恢复失败，请检查文件格式。',
+      );
+    }
+  }
+
   useEffect(() => {
     const context = (document as Document & { modelContext?: WebMcpContext })
       .modelContext;
@@ -1080,6 +853,75 @@ export default function CourseExplorer({
     }
     return buckets;
   }, [activePlan, earnedByBucket, selectedCourses]);
+  const suggestions = useMemo<{
+    rows: PlanSuggestion[];
+    unsatisfied: PlanGap[];
+  }>(() => {
+    const gaps = requirementBuckets
+      .filter(
+        (bucket) =>
+          bucket.required !== null &&
+          bucket.selected + bucket.earned < (bucket.required as number),
+      )
+      .map((bucket) => ({
+        id: bucket.id,
+        label: bucket.label,
+        shortfall:
+          (bucket.required as number) - bucket.selected - bucket.earned,
+      }))
+      .sort((a, b) => b.shortfall - a.shortfall);
+    if (!gaps.length) return { rows: [], unsatisfied: [] };
+
+    const rows: PlanSuggestion[] = [];
+    const busyIds = new Set<string>(selectedIds);
+    const busyBaseNames = new Set<string>(
+      selectedCourses.map((course) => courseBaseName(course.name)),
+    );
+    const blockedCourses = [...selectedCourses];
+    const coveredByGap = new Map<string, number>();
+    const openIds = new Set(gaps.map((gap) => gap.id));
+    let guard = 0;
+    while (openIds.size > 0 && guard < 40) {
+      guard += 1;
+      const gap = gaps.find((item) => openIds.has(item.id));
+      if (!gap) break;
+      const candidates = initialCourses
+        .filter((course) => {
+          if (busyIds.has(course.id)) return false;
+          if (busyBaseNames.has(courseBaseName(course.name))) return false;
+          if (categorizeRequirement(course.category) !== gap.id) return false;
+          return !blockedCourses.some((blocked) =>
+            coursesConflict(course, blocked),
+          );
+        })
+        .sort(
+          (a, b) =>
+            b.credits - a.credits ||
+            a.name.localeCompare(b.name, 'zh-Hans-CN'),
+        );
+      if (!candidates.length) {
+        openIds.delete(gap.id);
+        continue;
+      }
+      const course = candidates[0];
+      rows.push({ course, gapLabel: gap.label });
+      busyIds.add(course.id);
+      busyBaseNames.add(courseBaseName(course.name));
+      blockedCourses.push(course);
+      const covered = (coveredByGap.get(gap.id) ?? 0) + course.credits;
+      coveredByGap.set(gap.id, covered);
+      if (covered >= gap.shortfall) openIds.delete(gap.id);
+    }
+    const unsatisfied = gaps
+      .filter((gap) => (coveredByGap.get(gap.id) ?? 0) < gap.shortfall)
+      .map((gap) => ({
+        label: gap.label,
+        remaining: Math.round(
+          (gap.shortfall - (coveredByGap.get(gap.id) ?? 0)) * 100,
+        ) / 100,
+      }));
+    return { rows: rows.slice(0, 10), unsatisfied };
+  }, [initialCourses, requirementBuckets, selectedCourses, selectedIds]);
   const examGroups = useMemo(
     () =>
       EXAM_BUCKETS.map((bucket) => ({
@@ -1462,6 +1304,32 @@ export default function CourseExplorer({
               </Button>
               <span className="text-right text-[0.72rem] leading-5 text-slate-500">
                 选择课程数据 JSON（可含 term、label、courses 字段）
+              </span>
+              <div className="flex flex-wrap justify-end gap-1.5">
+                <Button
+                  className="h-10 rounded-xl border-slate-200 bg-white px-3 text-slate-600 hover:bg-slate-50"
+                  onClick={exportBackup}
+                  variant="outline"
+                >
+                  <Download /> 导出备份
+                </Button>
+                <Button
+                  className="h-10 rounded-xl border-slate-200 bg-white px-3 text-slate-600 hover:bg-slate-50"
+                  onClick={() => backupFileRef.current?.click()}
+                  variant="outline"
+                >
+                  <Upload /> 恢复备份
+                </Button>
+              </div>
+              <input
+                accept=".json,application/json"
+                className="sr-only"
+                onChange={handleBackupRestore}
+                ref={backupFileRef}
+                type="file"
+              />
+              <span className="text-right text-[0.72rem] leading-5 text-slate-500">
+                备份含学期数据、按学期选课记录与已修学分，可跨浏览器迁移
               </span>
             </div>
           </div>
@@ -2130,6 +1998,76 @@ export default function CourseExplorer({
               </div>
             </div>
 
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="font-bold">智能选课建议</h3>
+                <span className="text-xs text-slate-500">
+                  已排除与当前已选冲突的班次，加入后列表自动更新
+                </span>
+              </div>
+              {suggestions.rows.length > 0 && (
+                <>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    依据「{activePlan.label}」学分缺口（含历史已修与本学期已选）自动推荐，优先以高学分课程补齐缺口。
+                  </p>
+                  <div className="mt-3 grid gap-2">
+                    {suggestions.rows.map(({ course, gapLabel }) => (
+                      <div
+                        className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2"
+                        key={course.id}
+                      >
+                        <div className="min-w-0">
+                          <button
+                            className="text-left font-medium text-slate-900 hover:text-blue-700"
+                            onClick={() => setDetailCourse(course)}
+                            type="button"
+                          >
+                            {course.name}
+                          </button>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500">
+                            <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-blue-700">
+                              {gapLabel}
+                            </span>
+                            <span>{formatCredits(course.credits)} 学分</span>
+                            <span>{course.schedules[0]?.periodText || '时间待定'}</span>
+                            <span>{course.teacher}</span>
+                          </div>
+                        </div>
+                        <Button
+                          className="h-8 shrink-0 rounded-lg text-slate-600"
+                          onClick={() => toggleCourse(course.id)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          <Star /> 加入
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-slate-500">
+                    提示：核心课 / 专业课的「至少选 2 门作为学位课」按课程数量考核，已修学分不计入门数，请结合上方覆盖统计核对。
+                  </p>
+                </>
+              )}
+              {suggestions.unsatisfied.length > 0 && (
+                <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                  {suggestions.unsatisfied
+                    .map(
+                      (gap) =>
+                        `${gap.label}还差 ${formatCredits(gap.remaining)} 学分`,
+                    )
+                    .join('；')}
+                  ：本学期课表中暂无更多可选课程，可能安排在其它学期，或需线下确认。
+                </div>
+              )}
+              {!suggestions.rows.length &&
+                !suggestions.unsatisfied.length && (
+                  <div className="mt-2 text-sm leading-6 text-emerald-700">
+                    当前培养方向的学分要求已全部达成（含历史已修与本学期已选）。核心课 / 专业课门数要求请参考上方覆盖统计。
+                  </div>
+                )}
+            </div>
+
             <div className="selection-rules mt-4">
               <div className="rule-card">
                 <Target />
@@ -2420,7 +2358,9 @@ export default function CourseExplorer({
                         .filter((schedule) => schedule.weeks.includes(week))
                         .map((schedule, scheduleIndex) => {
                           const color =
-                            COURSE_COLORS[courseColorIndex(course.id)];
+                            COURSE_COLORS[
+                              courseColorIndex(course.id, COURSE_COLORS.length)
+                            ];
                           const conflict = currentWeekConflicts.has(course.id);
                           return (
                             <button
