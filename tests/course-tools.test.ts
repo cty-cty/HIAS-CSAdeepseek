@@ -180,9 +180,21 @@ test('isSchedule / isCourse: 结构校验', () => {
   );
 });
 
-test('categorizeRequirement: 课程属性归类', () => {
+test('categorizeRequirement: 课程属性归类（含创新创业模块课）', () => {
   assert.equal(categorizeRequirement('公共必修课'), 'publicRequired');
   assert.equal(categorizeRequirement('公共选修课'), 'publicElective');
+  assert.equal(
+    categorizeRequirement('公共选修课', '创业管理'),
+    'innovation',
+  );
+  assert.equal(
+    categorizeRequirement('公共选修课', '创新创业实践及案例研究'),
+    'innovation',
+  );
+  assert.equal(
+    categorizeRequirement('公共选修课', '心理学与心理健康'),
+    'publicElective',
+  );
   assert.equal(categorizeRequirement('专业核心课'), 'degree');
   assert.equal(categorizeRequirement('学科核心课'), 'degree');
   assert.equal(categorizeRequirement('专业课'), 'degree');

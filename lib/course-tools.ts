@@ -67,6 +67,31 @@ export const COURSE_CATEGORY_ORDER = [
   '创新创业课',
 ];
 
+// 2026-2027 学年创新创业模块课程（《课程学习及选课须知》），在课表中其
+// 课程属性为公共选修课，但对专业学位硕士是单独的 1 学分要求。
+export const INNOVATION_MODULE_COURSES = new Set([
+  '创业管理',
+  '创业启程',
+  '生物医药数字科创的未来',
+  '创新型个性发展心理学',
+  '创新创业实践及案例研究',
+  '创业融资入门',
+  '科技成果转移转化探究与实践',
+  '科技创新及方法',
+  '品牌与营销管理',
+  '创新创业训练营',
+  '技术发展与产品创新管理',
+  '军工航天领域的商业模式和案例',
+  '人工智能产品技术创新及应用案例',
+  '创造性思维',
+  '思维创新与设计',
+  '技术创业',
+  '科创产业前沿与人才科技政策体系',
+  '前沿科技融合与创新发展',
+  '技术创新创业投资与资本运作',
+  '科技创业领导力',
+]);
+
 export function intersects<T>(left: T[], right: T[]) {
   const lookup = new Set(left);
   return right.some((item) => lookup.has(item));
@@ -216,9 +241,16 @@ export function termIdFromLabel(label: string) {
   return normalized || 'imported-' + Date.now();
 }
 
-export function categorizeRequirement(category: string): RequirementBucketId {
+export function categorizeRequirement(
+  category: string,
+  courseName = '',
+): RequirementBucketId {
   if (category === '公共必修课') return 'publicRequired';
-  if (category === '公共选修课') return 'publicElective';
+  if (category === '公共选修课') {
+    return INNOVATION_MODULE_COURSES.has(courseName)
+      ? 'innovation'
+      : 'publicElective';
+  }
   if (DEGREE_CATEGORIES.includes(category)) return 'degree';
   if (NON_DEGREE_CATEGORIES.includes(category)) return 'professionalNonDegree';
   if (category === '创新创业课') return 'innovation';

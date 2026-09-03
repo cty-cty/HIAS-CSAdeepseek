@@ -15,6 +15,7 @@ export type ProgramPlan = {
   coreCourses: string[];
   professionalCourses: string[];
   note?: string;
+  publicRequiredNote?: string;
 };
 
 const PHYSICAL_ELECTRONICS_CORE = [
@@ -35,6 +36,9 @@ const PHYSICAL_ELECTRONICS_PROFESSIONAL = [
   '数字系统中的模拟电路技术',
 ];
 
+const PROFESSIONAL_PUBLIC_REQUIRED_NOTE =
+  '公共必修 8 学分组成：硕士学位英语 3 + 新中特 2 + 学术道德与学术写作规范 1 + 自然辩证法概论 1 + 工程伦理 1（工程伦理为工程硕士必修）。硕士学位英语符合条件可申请免修免考（考研英语一≥70、英语二≥75、CET-6≥600 等，以通知为准）。';
+
 export const PROGRAM_PLANS: ProgramPlan[] = [
   {
     id: 'physical-master',
@@ -52,6 +56,8 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     professionalMinimum: 2,
     coreCourses: PHYSICAL_ELECTRONICS_CORE,
     professionalCourses: PHYSICAL_ELECTRONICS_PROFESSIONAL,
+    publicRequiredNote:
+      '公共必修 7 学分组成：硕士学位英语 3 + 新时代中国特色社会主义理论与实践 2 + 学术道德与学术写作规范 1 + 自然辩证法概论 1（后两门须研一秋季修读）。硕士学位英语符合条件可申请免修免考（考研英语一≥70、英语二≥75、CET-6≥600、雅思≥7 或托福≥100 等，以通知为准）。',
   },
   {
     id: 'optical-master',
@@ -88,6 +94,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
       '数字图像处理',
       '非线性光学导论',
     ],
+    publicRequiredNote: PROFESSIONAL_PUBLIC_REQUIRED_NOTE,
   },
   {
     id: 'ai-master',
@@ -111,6 +118,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
       '智能物联网技术及应用',
     ],
     note: '核心课程至少选2门，其中至少1门须从《高级人工智能》《自然语言处理》中选择；专业课不包括研讨课和实验课。',
+    publicRequiredNote: PROFESSIONAL_PUBLIC_REQUIRED_NOTE,
   },
   {
     id: 'materials-master',
@@ -142,6 +150,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
       '半导体光子学（材料与化工）',
       '磁性材料',
     ],
+    publicRequiredNote: PROFESSIONAL_PUBLIC_REQUIRED_NOTE,
   },
   {
     id: 'physical-doctor',
@@ -159,5 +168,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     professionalMinimum: 2,
     coreCourses: PHYSICAL_ELECTRONICS_CORE,
     professionalCourses: PHYSICAL_ELECTRONICS_PROFESSIONAL,
+    publicRequiredNote:
+      '公共必修 11 学分组成：学硕 7 分（硕士英语 3 + 新中特 2 + 学术道德 1 + 自然辩证法 1）+ 中国马克思主义与当代 2 + 博士学位英语 2（《中国马克思主义与当代》《博士学位英语》按学校口径计入培养方案要求学分）。',
   },
 ];

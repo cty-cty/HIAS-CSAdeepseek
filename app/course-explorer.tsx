@@ -76,6 +76,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import EnrollmentNotice from '@/app/enrollment-notice';
 import { PROGRAM_PLANS } from '@/app/program-plans';
 
 const DEFAULT_TERM_ID = '2026-fall';
@@ -248,9 +249,9 @@ export default function CourseExplorer({
   const backupFileRef = useRef<HTMLInputElement>(null);
   const [onlySelected, setOnlySelected] = useState(false);
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
-  const [view, setView] = useState<'courses' | 'guide' | 'exams' | 'timetable'>(
-    'courses',
-  );
+  const [view, setView] = useState<
+    'courses' | 'guide' | 'notice' | 'exams' | 'timetable'
+  >('courses');
   const [programPlanId, setProgramPlanId] = useState('optical-master');
   const [week, setWeek] = useState(2);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -762,6 +763,27 @@ export default function CourseExplorer({
   }, [selectedCourses]);
   const activePlan =
     PROGRAM_PLANS.find((plan) => plan.id === programPlanId) ?? PROGRAM_PLANS[0];
+  // 创新创业模块课的归属取决于培养方向：专硕单列为“创新创业课”1 学分；
+  // 学硕/博士未单列时，它们仍属公共选修课学分。
+  const planSeparatesInnovation = activePlan.innovationCredits !== null;
+  const bucketOfCourse = useCallback(
+    (course: Course): RequirementBucketId => {
+      const bucket = categorizeRequirement(course.category, course.name);
+      return bucket === 'innovation' && !planSeparatesInnovation
+        ? 'publicElective'
+        : bucket;
+    },
+    [planSeparatesInnovation],
+  );
+  const bucketOfEarnedCategory = useCallback(
+    (category: string): RequirementBucketId => {
+      const bucket = categorizeRequirement(category);
+      return bucket === 'innovation' && !planSeparatesInnovation
+        ? 'publicElective'
+        : bucket;
+    },
+    [planSeparatesInnovation],
+  );
   const planCoreCourses = useMemo(
     () =>
       initialCourses.filter((course) =>
@@ -796,15 +818,15 @@ export default function CourseExplorer({
   const earnedByBucket = useMemo(() => {
     const totals = new Map<RequirementBucketId, number>();
     Object.entries(earnedCredits).forEach(([category, credits]) => {
-      const bucket = categorizeRequirement(category);
+      const bucket = bucketOfEarnedCategory(category);
       totals.set(bucket, (totals.get(bucket) ?? 0) + credits);
     });
     return totals;
-  }, [earnedCredits]);
+  }, [bucketOfEarnedCategory, earnedCredits]);
   const requirementBuckets = useMemo<RequirementBucket[]>(() => {
     const selectedByBucket = new Map<RequirementBucketId, number>();
     selectedCourses.forEach((course) => {
-      const bucket = categorizeRequirement(course.category);
+      const bucket = bucketOfCourse(course);
       selectedByBucket.set(
         bucket,
         (selectedByBucket.get(bucket) ?? 0) + course.credits,
@@ -847,19 +869,23 @@ export default function CourseExplorer({
         selected: selected('publicElective'),
         earned: earned('publicElective'),
         required: activePlan.publicElectiveCredits,
-        hint: '',
+        hint: planSeparatesInnovation
+          ? '创新创业模块课程按下方单项另计'
+          : '创新创业模块课程计入公共选修学分',
         nullText: '不限',
       },
-      {
+    ];
+    if (planSeparatesInnovation) {
+      buckets.push({
         id: 'innovation',
         label: '创新创业课',
         selected: selected('innovation'),
         earned: earned('innovation'),
         required: activePlan.innovationCredits,
-        hint: '',
+        hint: '如《创业管理》《创业启程》等，属性为公共选修课',
         nullText: '未单列',
-      },
-    ];
+      });
+    }
     if (selected('other') + earned('other') > 0) {
       buckets.push({
         id: 'other',
@@ -872,7 +898,13 @@ export default function CourseExplorer({
       });
     }
     return buckets;
-  }, [activePlan, earnedByBucket, selectedCourses]);
+  }, [
+    activePlan,
+    bucketOfCourse,
+    earnedByBucket,
+    planSeparatesInnovation,
+    selectedCourses,
+  ]);
   const suggestions = useMemo<{
     rows: PlanSuggestion[];
     unsatisfied: PlanGap[];
@@ -909,7 +941,7 @@ export default function CourseExplorer({
         .filter((course) => {
           if (busyIds.has(course.id)) return false;
           if (busyBaseNames.has(courseBaseName(course.name))) return false;
-          if (categorizeRequirement(course.category) !== gap.id) return false;
+          if (bucketOfCourse(course) !== gap.id) return false;
           return !blockedCourses.some((blocked) =>
             coursesConflict(course, blocked),
           );
@@ -941,7 +973,13 @@ export default function CourseExplorer({
         ) / 100,
       }));
     return { rows: rows.slice(0, 10), unsatisfied };
-  }, [initialCourses, requirementBuckets, selectedCourses, selectedIds]);
+  }, [
+    bucketOfCourse,
+    initialCourses,
+    requirementBuckets,
+    selectedCourses,
+    selectedIds,
+  ]);
   const graduationPercent = Math.min(
     100,
     Math.round(
@@ -1640,6 +1678,13 @@ export default function CourseExplorer({
                 <ClipboardList /> 培养要求
               </button>
               <button
+                className={`view-tab ${view === 'notice' ? 'view-tab-active' : ''}`}
+                onClick={() => setView('notice')}
+                type="button"
+              >
+                <Info /> 选课须知
+              </button>
+              <button
                 className={`view-tab ${view === 'exams' ? 'view-tab-active' : ''}`}
                 onClick={() => setView('exams')}
                 type="button"
@@ -1657,7 +1702,9 @@ export default function CourseExplorer({
           </div>
         </div>
 
-        {view === 'courses' ? (
+        {view === 'notice' ? (
+          <EnrollmentNotice />
+        ) : view === 'courses' ? (
           <section className="py-6">
             <div className="section-heading mb-4 flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -1939,6 +1986,11 @@ export default function CourseExplorer({
                   );
                 })}
               </div>
+              {activePlan.publicRequiredNote && (
+                <p className="mt-3 border-t border-slate-100 pt-2.5 text-[0.74rem] leading-5 text-slate-500">
+                  {activePlan.publicRequiredNote}
+                </p>
+              )}
             </div>
 
             <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
