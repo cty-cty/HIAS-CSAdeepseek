@@ -1,4 +1,4 @@
-﻿/* oxlint-disable react/react-compiler -- 巨型客户端组件触发编译器整体 bail，PreserveManualMemo 全量误报；React Compiler 未实际启用 */
+/* oxlint-disable react/react-compiler -- 巨型客户端组件触发编译器整体 bail，PreserveManualMemo 全量误报；React Compiler 未实际启用 */
 /* oxlint-enable 说明：其余文件仍启用该规则 */'use client';
 
 import {
@@ -1300,7 +1300,7 @@ export default function CourseExplorer({
                 <span className="inline-block size-1.5 rounded-full bg-[#7ad3bd]" />
                 {activeDataset.label} · 杭高院 HIAS
               </p>
-              <h1 className="max-w-3xl bg-gradient-to-r from-white via-[#dcf5ee] to-[#8fd8e0] bg-clip-text text-[2rem] font-bold leading-[1.15] tracking-[-0.035em] text-transparent sm:text-[2.6rem]">
+              <h1 className="max-w-3xl text-[2rem] font-bold leading-[1.15] tracking-[-0.035em] text-white drop-shadow-[0_2px_10px_rgba(6,40,52,0.35)] sm:text-[2.6rem]">
                 {activeDataset.label}预选课助手
               </h1>
               <p className="mt-3.5 max-w-2xl text-[0.9rem] leading-7 text-[#c9ded9] sm:text-[0.97rem]">
