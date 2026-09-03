@@ -1385,6 +1385,37 @@ export default function CourseExplorer({
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
+                <div className="min-w-0 pr-1">
+                  <p className="text-[0.8rem] font-semibold text-white/90">
+                    硕士学位英语免修免考
+                    {englishExemption && (
+                      <span className="ml-1.5 rounded-full bg-[#7ad3bd]/25 px-1.5 py-0.5 text-[0.64rem] font-bold text-[#9fe9d6]">
+                        已免修 +3 学分
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-0.5 text-[0.66rem] leading-4 text-white/55">
+                    符合免修条件（考研英语≥70 等）即可开启：英语班课不排课，公共必修计 3 分
+                  </p>
+                </div>
+                <button
+                  aria-checked={englishExemption}
+                  aria-label="硕士学位英语免修免考开关"
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 ${
+                    englishExemption ? 'bg-[#7ad3bd]' : 'bg-white/25'
+                  }`}
+                  onClick={toggleEnglishExemption}
+                  role="switch"
+                  type="button"
+                >
+                  <span
+                    className={`absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                      englishExemption ? 'translate-x-5' : ''
+                    }`}
+                  />
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   className="h-10 rounded-xl border-transparent bg-[#7ad3bd] text-[#0a3933] hover:bg-[#8fe0cb]"
@@ -2074,33 +2105,6 @@ export default function CourseExplorer({
                   {activePlan.publicRequiredNote}
                 </p>
               )}
-              <div className="mt-3 flex items-start justify-between gap-4 border-t border-slate-100 pt-3">
-                <div className="min-w-0 pr-2">
-                  <p className="text-sm font-semibold text-slate-700">
-                    硕士学位英语免修免考
-                  </p>
-                  <p className="mt-0.5 text-[0.74rem] leading-5 text-slate-500">
-                    若符合教务处认定条件（如考研英语一≥70、英语二≥75、CET-6≥600、雅思≥7、托福≥100）并已获准，请开启：公共必修课视作已获
-                    3 学分（成绩记 EX），英语班级课程不再排入课表与选课推荐，已选的英语班课会自动移出。
-                  </p>
-                </div>
-                <button
-                  aria-checked={englishExemption}
-                  aria-label="硕士学位英语免修免考开关"
-                  className={`relative mt-1 h-6 w-11 shrink-0 rounded-full transition-colors duration-200 ${
-                    englishExemption ? 'bg-emerald-500' : 'bg-slate-300'
-                  }`}
-                  onClick={toggleEnglishExemption}
-                  role="switch"
-                  type="button"
-                >
-                  <span
-                    className={`absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow transition-transform duration-200 ${
-                      englishExemption ? 'translate-x-5' : ''
-                    }`}
-                  />
-                </button>
-              </div>
             </div>
 
             <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
