@@ -408,6 +408,35 @@ function ScheduleLines({ schedules }: { schedules: Schedule[] }) {
   );
 }
 
+type RequirementBucketId =
+  | 'publicRequired'
+  | 'degree'
+  | 'professionalNonDegree'
+  | 'publicElective'
+  | 'innovation'
+  | 'other';
+
+type RequirementBucket = {
+  id: RequirementBucketId;
+  label: string;
+  selected: number;
+  required: number | null;
+  hint: string;
+  nullText: string;
+};
+
+const DEGREE_CATEGORIES = ['专业核心课', '学科核心课', '专业课'];
+const NON_DEGREE_CATEGORIES = ['研讨课', '实验课'];
+
+function categorizeRequirement(category: string): RequirementBucketId {
+  if (category === '公共必修课') return 'publicRequired';
+  if (category === '公共选修课') return 'publicElective';
+  if (DEGREE_CATEGORIES.includes(category)) return 'degree';
+  if (NON_DEGREE_CATEGORIES.includes(category)) return 'professionalNonDegree';
+  if (category === '创新创业课') return 'innovation';
+  return 'other';
+}
+
 export default function CourseExplorer({
   initialCourses: defaultCourses,
 }: {
@@ -798,6 +827,70 @@ export default function CourseExplorer({
         activePlan.professionalCourses.includes(course.name),
     )
     .reduce((sum, course) => sum + course.credits, 0);
+  const requirementBuckets = useMemo<RequirementBucket[]>(() => {
+    const selectedByBucket = new Map<RequirementBucketId, number>();
+    selectedCourses.forEach((course) => {
+      const bucket = categorizeRequirement(course.category);
+      selectedByBucket.set(
+        bucket,
+        (selectedByBucket.get(bucket) ?? 0) + course.credits,
+      );
+    });
+    const sum = (id: RequirementBucketId) => selectedByBucket.get(id) ?? 0;
+    const buckets: RequirementBucket[] = [
+      {
+        id: 'publicRequired',
+        label: '公共必修课',
+        selected: sum('publicRequired'),
+        required: activePlan.publicRequiredCredits,
+        hint: '',
+        nullText: '不限',
+      },
+      {
+        id: 'degree',
+        label: '专业学位课',
+        selected: sum('degree'),
+        required: activePlan.degreeCourseCredits,
+        hint: `其中至少 ${activePlan.coreMinimum} 门核心课、${activePlan.professionalMinimum} 门专业课`,
+        nullText: '不限',
+      },
+      {
+        id: 'professionalNonDegree',
+        label: '专业非学位课',
+        selected: sum('professionalNonDegree'),
+        required: activePlan.professionalNonDegreeCredits,
+        hint: '含研讨课与实验课',
+        nullText: '不限',
+      },
+      {
+        id: 'publicElective',
+        label: '公共选修课',
+        selected: sum('publicElective'),
+        required: activePlan.publicElectiveCredits,
+        hint: '',
+        nullText: '不限',
+      },
+      {
+        id: 'innovation',
+        label: '创新创业课',
+        selected: sum('innovation'),
+        required: activePlan.innovationCredits,
+        hint: '',
+        nullText: '未单列',
+      },
+    ];
+    if (sum('other') > 0) {
+      buckets.push({
+        id: 'other',
+        label: '未归类课程',
+        selected: sum('other'),
+        required: null,
+        hint: '课程属性未匹配到上述类别',
+        nullText: '未计入',
+      });
+    }
+    return buckets;
+  }, [selectedCourses, activePlan]);
   const examGroups = useMemo(
     () =>
       EXAM_BUCKETS.map((bucket) => ({
@@ -1667,29 +1760,78 @@ export default function CourseExplorer({
               </div>
             </div>
 
-            <div className="requirement-grid mt-4">
-              {[
-                ['公共必修课', `${activePlan.publicRequiredCredits} 学分`],
-                ['专业学位课', `≥${activePlan.degreeCourseCredits} 学分`],
-                [
-                  '专业非学位课',
-                  activePlan.professionalNonDegreeCredits === null
-                    ? '不限'
-                    : `${activePlan.professionalNonDegreeCredits} 学分`,
-                ],
-                ['公共选修课', `${activePlan.publicElectiveCredits} 学分`],
-                [
-                  '创新创业课',
-                  activePlan.innovationCredits === null
-                    ? '未单列'
-                    : `${activePlan.innovationCredits} 学分`,
-                ],
-              ].map(([label, value]) => (
-                <div className="requirement-item" key={label}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </div>
-              ))}
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="font-bold">学分达成度</h3>
+                <span className="text-sm text-slate-500">
+                  已选总学分 {formatCredits(selectedCredits)} / ≥
+                  {activePlan.totalCredits}
+                </span>
+              </div>
+              <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-sky-500 transition-all"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      (selectedCredits / activePlan.totalCredits) * 100,
+                    )}%`,
+                  }}
+                />
+              </div>
+              <div className="mt-4 grid gap-3">
+                {requirementBuckets.map((bucket) => {
+                  const required = bucket.required;
+                  const met = required !== null && bucket.selected >= required;
+                  const ratio =
+                    required !== null && required > 0
+                      ? bucket.selected / required
+                      : 0;
+                  const remaining =
+                    required !== null
+                      ? Math.max(0, required - bucket.selected)
+                      : 0;
+                  return (
+                    <div key={bucket.id}>
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <span className="font-medium">{bucket.label}</span>
+                        <span className="text-sm text-slate-600">
+                          {required === null
+                            ? `${formatCredits(bucket.selected)} 学分 · ${bucket.nullText}`
+                            : `${formatCredits(bucket.selected)} / ${formatCredits(required)} 学分`}
+                        </span>
+                      </div>
+                      {required !== null ? (
+                        <>
+                          <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                met ? 'bg-emerald-500' : 'bg-sky-500'
+                              }`}
+                              style={{
+                                width: `${Math.min(100, ratio * 100)}%`,
+                              }}
+                            />
+                          </div>
+                          <p
+                            className={`mt-1 text-xs leading-5 ${
+                              met ? 'text-emerald-600' : 'text-amber-600'
+                            }`}
+                          >
+                            {met ? '已达标' : `还差 ${formatCredits(remaining)} 学分`}
+                            {bucket.hint ? ` · ${bucket.hint}` : ''}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          {bucket.nullText}
+                          {bucket.hint ? ` · ${bucket.hint}` : ''}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="selection-rules mt-4">
