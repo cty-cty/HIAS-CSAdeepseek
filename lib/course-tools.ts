@@ -241,6 +241,16 @@ export function termIdFromLabel(label: string) {
   return normalized || 'imported-' + Date.now();
 }
 
+// 官方学期命名如 “2026—2027学年(秋)第一学期”，用于标题/徽章的紧凑缩写为 “26—27 秋季”。
+const ACADEMIC_TERM = /^(\d{4})—(\d{4})学年\(([春夏秋])\)第[一二三]学期$/;
+
+export function compactTermLabel(label: string) {
+  const match = label.trim().match(ACADEMIC_TERM);
+  if (!match) return label;
+  const season = match[3] === '秋' ? '秋季' : match[3] === '春' ? '春季' : '夏季';
+  return `${match[1].slice(2)}—${match[2].slice(2)} ${season}`;
+}
+
 export const MASTER_ENGLISH_CREDITS = 3;
 
 // 硕士学位英语班级课程（英语A/英语B 分班、读写/听说类），免修认定后无需修读。

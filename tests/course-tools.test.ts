@@ -7,6 +7,7 @@ import {
   type Course,
   type Schedule,
   categorizeRequirement,
+  compactTermLabel,
   courseBaseName,
   courseColorIndex,
   courseConflictsInWeek as conflictsInWeek,
@@ -357,6 +358,23 @@ test('parseBackupPayload: 完整备份往返与容错', () => {
       ),
     /选课记录/,
   );
+});
+
+test('compactTermLabel: 官方学期名 → 紧凑缩写', () => {
+  assert.equal(
+    compactTermLabel('2026—2027学年(秋)第一学期'),
+    '26—27 秋季',
+  );
+  assert.equal(
+    compactTermLabel('2026—2027学年(春)第二学期'),
+    '26—27 春季',
+  );
+  assert.equal(
+    compactTermLabel('2026—2027学年(夏)第三学期'),
+    '26—27 夏季',
+  );
+  assert.equal(compactTermLabel('2027 春季'), '2027 春季');
+  assert.equal(compactTermLabel('导入课程数据'), '导入课程数据');
 });
 
 test('isMasterEnglishCourseName: 识别英语学位班级课', () => {

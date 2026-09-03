@@ -47,6 +47,7 @@ import {
   type RequirementBucketId,
   type Schedule,
   categorizeRequirement,
+  compactTermLabel,
   courseBaseName,
   courseColorIndex,
   courseConflictsInWeek,
@@ -83,7 +84,7 @@ import EnrollmentNotice from '@/app/enrollment-notice';
 import { PROGRAM_PLANS } from '@/app/program-plans';
 
 const DEFAULT_TERM_ID = '2026-fall';
-const DEFAULT_TERM_LABEL = '2026 秋季';
+const DEFAULT_TERM_LABEL = '2026—2027学年(秋)第一学期';
 const COURSE_DATASETS_STORAGE_KEY = 'hias-course-datasets-v1';
 const ACTIVE_TERM_STORAGE_KEY = 'hias-active-term-v1';
 const SELECTED_BY_TERM_STORAGE_KEY = 'hias-selected-by-term-v1';
@@ -1298,10 +1299,10 @@ export default function CourseExplorer({
               </div>
               <p className="mb-3.5 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.07] px-3 py-1 text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-[#bfe8dd]">
                 <span className="inline-block size-1.5 rounded-full bg-[#7ad3bd]" />
-                {activeDataset.label} · 杭高院 HIAS
+                {compactTermLabel(activeDataset.label)} · 杭高院 HIAS
               </p>
               <h1 className="max-w-3xl text-[2rem] font-bold leading-[1.15] tracking-[-0.035em] text-white drop-shadow-[0_2px_10px_rgba(6,40,52,0.35)] sm:text-[2.6rem]">
-                {activeDataset.label}预选课助手
+                {compactTermLabel(activeDataset.label)}预选课助手
               </h1>
               <p className="mt-3.5 max-w-2xl text-[0.9rem] leading-7 text-[#c9ded9] sm:text-[0.97rem]">
                 依据已整理的课表与培养方案材料，帮助 2026
@@ -1312,7 +1313,7 @@ export default function CourseExplorer({
                   <Users /> 2026 级研一新生专用
                 </span>
                 <span>
-                  <FileSpreadsheet /> {activeDataset.label}课表数据
+                  <FileSpreadsheet /> {compactTermLabel(activeDataset.label)}课表数据
                 </span>
                 <span>
                   <BookOpen /> {initialCourses.length} 门课程
@@ -2633,7 +2634,7 @@ export default function CourseExplorer({
         </section>
 
         <footer className="mb-4 mt-2 flex flex-col gap-2 border-t border-slate-200 py-5 text-xs leading-5 text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <span>HIAS-CSAdeepseek · {activeDataset.label}预选课辅助工具</span>
+          <span>HIAS-CSAdeepseek · {compactTermLabel(activeDataset.label)}预选课辅助工具</span>
           <span>HIAS-CSAdeepseek · Course Selection Assistant</span>
         </footer>
       </div>
