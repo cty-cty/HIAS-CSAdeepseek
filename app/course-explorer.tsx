@@ -942,6 +942,12 @@ export default function CourseExplorer({
       }));
     return { rows: rows.slice(0, 10), unsatisfied };
   }, [initialCourses, requirementBuckets, selectedCourses, selectedIds]);
+  const graduationPercent = Math.min(
+    100,
+    Math.round(
+      ((earnedTotal + selectedCredits) / activePlan.totalCredits) * 100,
+    ),
+  );
   const examGroups = useMemo(
     () =>
       EXAM_BUCKETS.map((bucket) => ({
@@ -1176,9 +1182,9 @@ export default function CourseExplorer({
     <main className="min-h-screen overflow-x-clip bg-[#f7f7f2] text-slate-900">
       <div className="mx-auto max-w-[1380px] px-3 py-4 sm:px-5 lg:px-7">
         <section className="hero-panel relative overflow-hidden rounded-[26px] border border-[#dce5de] px-5 py-6 shadow-[0_22px_65px_rgba(61,83,72,.10)] sm:px-8 sm:py-7">
-          <div className="hero-doodle hero-doodle-one" />
-          <div className="hero-doodle hero-doodle-two" />
-          <div className="relative z-10 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-stretch">
+          <div className="hero-blob hero-blob-a" aria-hidden="true" />
+          <div className="hero-blob hero-blob-b" aria-hidden="true" />
+          <div className="relative z-10 grid gap-6 lg:grid-cols-[minmax(0,1fr)_330px] lg:items-stretch">
             <div>
               <div className="brand-lockup">
                 <div aria-hidden="true" className="brand-mark">
@@ -1186,15 +1192,16 @@ export default function CourseExplorer({
                 </div>
                 <span>研究生预选课辅助工具</span>
               </div>
-              <p className="mb-3 inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-[#dceee8]">
-                {activeDataset.label} · HIAS
+              <p className="mb-3.5 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.07] px-3 py-1 text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-[#bfe8dd]">
+                <span className="inline-block size-1.5 rounded-full bg-[#7ad3bd]" />
+                {activeDataset.label} · 杭高院 HIAS
               </p>
-              <h1 className="max-w-3xl text-[2rem] font-bold leading-[1.18] tracking-[-0.035em] text-white sm:text-[2.45rem]">
+              <h1 className="max-w-3xl bg-gradient-to-r from-white via-[#dcf5ee] to-[#8fd8e0] bg-clip-text text-[2rem] font-bold leading-[1.15] tracking-[-0.035em] text-transparent sm:text-[2.6rem]">
                 {activeDataset.label}预选课助手
               </h1>
-              <p className="mt-3 max-w-2xl text-[0.9rem] leading-7 text-[#d8e6e2] sm:text-[0.96rem]">
-                课程数据依据已整理的 2026 年秋季课表与培养方案材料，仅供参考，
-                用于帮助大家模拟选课、查看冲突与规划学分；最终课程安排请以学校正式通知和选课系统为准。
+              <p className="mt-3.5 max-w-2xl text-[0.9rem] leading-7 text-[#c9ded9] sm:text-[0.97rem]">
+                依据已整理的课表与培养方案材料，帮助 2026
+                级研一新生模拟选课、检查冲突、规划学分；最终课程安排请以学校正式通知和选课系统为准。
               </p>
               <div className="hero-meta mt-5">
                 <span>
@@ -1218,110 +1225,94 @@ export default function CourseExplorer({
               </div>
             </div>
             <aside className="plan-summary">
-              <div>
-                <p>MY PRESELECTION</p>
-                <div className="credit-spotlight mt-3">
-                  <div className="flex items-end gap-2">
-                    <strong>{formatCredits(selectedCredits)}</strong>
-                    <span>学分</span>
-                  </div>
-                  <div className="plan-course-count">
-                    已选 <b>{selectedCourses.length}</b> 门课程
+              <div className="flex items-center gap-4">
+                <div className="plan-ring" aria-hidden="true">
+                  <svg viewBox="0 0 100 100">
+                    <defs>
+                      <linearGradient
+                        id="plan-ring-grad"
+                        x1="0"
+                        y1="0"
+                        x2="1"
+                        y2="1"
+                      >
+                        <stop offset="0%" stopColor="#8be8d0" />
+                        <stop offset="100%" stopColor="#63c9f2" />
+                      </linearGradient>
+                    </defs>
+                    <circle className="plan-ring-track" cx="50" cy="50" r="42" />
+                    <circle
+                      className="plan-ring-fill"
+                      cx="50"
+                      cy="50"
+                      r="42"
+                      strokeDasharray="263.9"
+                      strokeDashoffset={`${263.9 * (1 - graduationPercent / 100)}`}
+                    />
+                  </svg>
+                  <div className="plan-ring-label">
+                    <strong>{graduationPercent}</strong>
+                    <span>%</span>
                   </div>
                 </div>
-                {selectedCreditBreakdown.length > 0 ? (
-                  <>
-                    <div className="mt-4 text-xs font-semibold text-slate-500">
-                      已选类别明细
-                    </div>
-                    <div className="credit-breakdown mt-2">
-                      {selectedCreditBreakdown.map(([label, credits]) => (
-                        <span key={label}>
-                          {label} {formatCredits(credits)}
-                        </span>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <div className="credit-empty mt-4">
-                    选择课程后，这里会汇总学分
-                  </div>
-                )}
-                {earnedTotal > 0 && (
-                  <div className="mt-4 rounded-xl border border-white/15 bg-white/10 p-3">
-                    <div className="flex items-center justify-between gap-2 text-xs text-white/85">
-                      <span className="font-semibold tracking-wide">
-                        已修 + 本学期累计
-                      </span>
-                      <span>
-                        {formatCredits(earnedTotal + selectedCredits)} / ≥
-                        {activePlan.totalCredits} 学分
-                      </span>
-                    </div>
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
-                      <div
-                        className="h-full rounded-full bg-emerald-300 transition-[width] duration-700 ease-out"
-                        style={{
-                          width: `${Math.min(
-                            100,
-                            ((earnedTotal + selectedCredits) /
-                              activePlan.totalCredits) *
-                              100,
-                          )}%`,
-                        }}
-                      />
-                    </div>
-                    <p className="mt-1.5 text-[0.7rem] leading-4 text-white/70">
-                      历史已修 {formatCredits(earnedTotal)} + 本学期已选{' '}
-                      {formatCredits(selectedCredits)}；按「{activePlan.label}
-                      」要求，详细分类进度见{' '}
-                      <button
-                        className="font-semibold text-white/90 underline underline-offset-2 hover:text-white"
-                        onClick={() => setView('guide')}
-                        type="button"
-                      >
-                        培养要求
-                      </button>
-                    </p>
-                  </div>
-                )}
-                {earnedTotal === 0 && (
-                  <button
-                    className="mt-3 flex items-center gap-1 text-[0.72rem] leading-4 text-white/60 underline-offset-2 hover:text-white hover:underline"
-                    onClick={() => setView('guide')}
-                    type="button"
-                  >
-                    <History className="size-3" /> 有上学期已修学分？在「培养要求」页导入后这里会显示累计进度
-                  </button>
-                )}
+                <div className="min-w-0 flex-1">
+                  <p className="plan-kicker">毕业学分进度</p>
+                  <p className="plan-total">
+                    {earnedTotal > 0
+                      ? `已修 ${formatCredits(earnedTotal)} + 已选 ${formatCredits(selectedCredits)}`
+                      : `本学期已选 ${formatCredits(selectedCredits)} 学分`}
+                  </p>
+                  <p className="plan-sub">
+                    累计 {formatCredits(earnedTotal + selectedCredits)} / ≥
+                    {activePlan.totalCredits}
+                  </p>
+                </div>
               </div>
-              <div className="mt-6 grid grid-cols-2 gap-2.5">
+              {selectedCreditBreakdown.length > 0 && (
+                <div className="plan-breakdown">
+                  {selectedCreditBreakdown.map(([label, credits]) => (
+                    <span key={label}>
+                      {label} {formatCredits(credits)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
                 <Button
-                  className="h-11 rounded-xl bg-[#315f57] text-white hover:bg-[#274f48]"
+                  className="h-10 rounded-xl border-transparent bg-[#7ad3bd] text-[#0a3933] hover:bg-[#8fe0cb]"
                   onClick={() => setView('timetable')}
                 >
                   <CalendarDays /> 我的课表
                 </Button>
                 <Button
-                  className="h-11 rounded-xl border-[#d6ded9] bg-white text-[#49645e] hover:bg-[#f4f7f5]"
-                  onClick={exportSelected}
+                  className="h-10 rounded-xl border-white/25 bg-white/10 text-white hover:border-white/40 hover:bg-white/20"
                   disabled={!selectedCourses.length}
+                  onClick={exportSelected}
                   variant="outline"
                 >
                   <Download /> 导出 CSV
                 </Button>
               </div>
-              <p className="mt-2 text-[0.72rem] leading-5 text-slate-500">
-                导出格式符合 WakeUp 课程表模板；确认课程安排无误后再导入。
+              <p className="plan-note">
+                导出格式与 WakeUp 模板一致，确认课程安排无误后再导入。
               </p>
               <Button
-                className="mt-2 h-9 w-full rounded-lg border-rose-200 bg-white text-rose-600 hover:bg-rose-50"
+                className="h-9 w-full rounded-lg border-rose-300/40 bg-rose-400/10 text-rose-100 hover:bg-rose-400/25"
                 disabled={!selectedCourses.length}
                 onClick={clearSelectedCourses}
                 variant="outline"
               >
                 <Trash2 /> 清空当前学期已选课程
               </Button>
+              {earnedTotal === 0 && (
+                <button
+                  className="plan-earned-hint"
+                  onClick={() => setView('guide')}
+                  type="button"
+                >
+                  <History className="size-3" /> 有上学期已修学分？去「培养要求」导入
+                </button>
+              )}
             </aside>
           </div>
         </section>
