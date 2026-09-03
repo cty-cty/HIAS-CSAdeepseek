@@ -284,6 +284,18 @@ function templateWeekText(schedule: Schedule) {
     .replaceAll(',', '、');
 }
 
+function isSchedule(value: unknown): value is Schedule {
+  if (!value || typeof value !== 'object') return false;
+  const schedule = value as Partial<Schedule>;
+  return (
+    typeof schedule.dayIndex === 'number' &&
+    typeof schedule.start === 'number' &&
+    typeof schedule.end === 'number' &&
+    Array.isArray(schedule.weeks) &&
+    schedule.weeks.every((week) => typeof week === 'number')
+  );
+}
+
 function isCourse(value: unknown): value is Course {
   if (!value || typeof value !== 'object') return false;
   const course = value as Partial<Course>;
@@ -292,8 +304,28 @@ function isCourse(value: unknown): value is Course {
     typeof course.code === 'string' &&
     typeof course.name === 'string' &&
     typeof course.credits === 'number' &&
-    Array.isArray(course.schedules)
+    Array.isArray(course.schedules) &&
+    course.schedules.every(isSchedule)
   );
+}
+
+// Stable color index from a string id. `Number(id) % length` breaks when ids
+// are non-numeric (imported datasets), so hash the string instead.
+function courseColorIndex(id: string) {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) % COURSE_COLORS.length;
+}
+
+function safeSetItem(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function termIdFromLabel(label: string) {
@@ -323,8 +355,17 @@ function parseCourseDataset(text: string, fileName: string): CourseDataset {
     );
   }
   if (!rawCourses.every(isCourse)) {
+    const scheduleProblem = rawCourses.some(
+      (course) =>
+        course &&
+        typeof course === 'object' &&
+        Array.isArray((course as { schedules?: unknown }).schedules) &&
+        !(course as { schedules: unknown[] }).schedules.every(isSchedule),
+    );
     throw new Error(
-      '课程数据字段不完整，至少需要 id、code、name、credits 和 schedules。',
+      scheduleProblem
+        ? '部分课程的上课安排（schedules）结构不正确：每条安排需要包含数字类型的 dayIndex、start、end 和数字数组 weeks。'
+        : '课程数据字段不完整，至少需要 id、code、name、credits 和 schedules。',
     );
   }
 
@@ -385,6 +426,7 @@ export default function CourseExplorer({
   const [storageReady, setStorageReady] = useState(false);
   const [dataMessage, setDataMessage] = useState('');
   const [dataError, setDataError] = useState('');
+  const [storageNotice, setStorageNotice] = useState('');
   const [onlySelected, setOnlySelected] = useState(false);
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
   const [view, setView] = useState<'courses' | 'guide' | 'exams' | 'timetable'>(
@@ -494,28 +536,40 @@ export default function CourseExplorer({
       parsedDatasets.some((dataset) => dataset.id === storedActiveTerm)
         ? storedActiveTerm
         : DEFAULT_TERM_ID;
-    setCustomDatasets(parsedDatasets);
-    setActiveTermId(nextActiveTerm ?? DEFAULT_TERM_ID);
-    setSelectedByTerm(parsedSelections);
-    setStorageReady(true);
+    queueMicrotask(() => {
+      setCustomDatasets(parsedDatasets);
+      setActiveTermId(nextActiveTerm ?? DEFAULT_TERM_ID);
+      setSelectedByTerm(parsedSelections);
+      setStorageReady(true);
+    });
+  }, []);
+
+  const storageFailureRef = useRef(false);
+  const persistToStorage = useCallback((key: string, value: unknown) => {
+    const ok = safeSetItem(key, value);
+    const hadFailure = storageFailureRef.current;
+    storageFailureRef.current = !ok;
+    if (hadFailure && ok) {
+      queueMicrotask(() => setStorageNotice(''));
+    } else if (!ok) {
+      queueMicrotask(() =>
+        setStorageNotice(
+          '浏览器本地存储写入失败（空间可能不足），最近的改动可能没有保存，请及时导出 CSV 备份选课结果。',
+        ),
+      );
+    }
   }, []);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      COURSE_DATASETS_STORAGE_KEY,
-      JSON.stringify(customDatasets),
-    );
-    window.localStorage.setItem(ACTIVE_TERM_STORAGE_KEY, activeTermId);
-  }, [activeTermId, customDatasets, storageReady]);
+    persistToStorage(COURSE_DATASETS_STORAGE_KEY, customDatasets);
+    persistToStorage(ACTIVE_TERM_STORAGE_KEY, activeTermId);
+  }, [activeTermId, customDatasets, persistToStorage, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      SELECTED_BY_TERM_STORAGE_KEY,
-      JSON.stringify(selectedByTerm),
-    );
-  }, [selectedByTerm, storageReady]);
+    persistToStorage(SELECTED_BY_TERM_STORAGE_KEY, selectedByTerm);
+  }, [persistToStorage, selectedByTerm, storageReady]);
 
   const setSelectedIdsForActive = useCallback(
     (next: string[] | ((current: string[]) => string[])) => {
@@ -544,20 +598,40 @@ export default function CourseExplorer({
       const dataset = isGenericFile
         ? { ...parsedDataset, id: activeTermId, label: activeDataset.label }
         : parsedDataset;
+      const sameTermReimport = dataset.id in selectedByTerm;
+      const previousIds = selectedByTerm[dataset.id] ?? EMPTY_SELECTED_IDS;
+      const validIds = new Set(dataset.courses.map((item) => item.id));
+      const keptIds = sameTermReimport
+        ? previousIds.filter((id) => validIds.has(id))
+        : [];
+      const droppedCount = previousIds.length - keptIds.length;
       setCustomDatasets((current) => [
         ...current.filter((item) => item.id !== dataset.id),
         dataset,
       ]);
       setActiveTermId(dataset.id);
-      setSelectedByTerm((current) => ({ ...current, [dataset.id]: [] }));
+      setSelectedByTerm((current) => {
+        if (!(dataset.id in current)) {
+          return { ...current, [dataset.id]: [] };
+        }
+        const existing = current[dataset.id] ?? [];
+        const kept = existing.filter((id) => validIds.has(id));
+        return kept.length === existing.length
+          ? current
+          : { ...current, [dataset.id]: kept };
+      });
       clearFilters();
       setDetailCourse(null);
+      const resultSuffix = !sameTermReimport
+        ? '；该学期的已选课程已单独保存'
+        : previousIds.length === 0
+          ? '；该学期还没有已选课程'
+          : `；保留 ${keptIds.length} 门仍在课程表中的已选课程` +
+            (droppedCount > 0
+              ? `，移除 ${droppedCount} 门已不在课表中的课程`
+              : '');
       setDataMessage(
-        '已加载“' +
-          dataset.label +
-          '”的 ' +
-          dataset.courses.length +
-          ' 门课程；该学期的已选课程已单独保存。',
+        `已加载“${dataset.label}”的 ${dataset.courses.length} 门课程${resultSuffix}。`,
       );
     } catch (error) {
       setDataError(
@@ -661,7 +735,8 @@ export default function CourseExplorer({
   }, [initialCourses, setSelectedIdsForActive]);
 
   useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
+    const frame = window.requestAnimationFrame(() => setVisibleCount(PAGE_SIZE));
+    return () => window.cancelAnimationFrame(frame);
   }, [query, college, subject, category, day, onlySelected, onlyNoConflict]);
 
   const colleges = useMemo(
@@ -963,7 +1038,7 @@ export default function CourseExplorer({
             <div>
               <div className="brand-lockup">
                 <div aria-hidden="true" className="brand-mark">
-                  HIAS-CSA
+                  HIAS-CSAdeepseek
                 </div>
                 <span>研究生预选课辅助工具</span>
               </div>
@@ -1118,6 +1193,22 @@ export default function CourseExplorer({
               role={dataError ? 'alert' : 'status'}
             >
               {dataError || dataMessage}
+            </div>
+          )}
+          {storageNotice && (
+            <div
+              className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm leading-6 text-amber-800"
+              role="alert"
+            >
+              <span>{storageNotice}</span>
+              <button
+                aria-label="关闭存储提示"
+                className="shrink-0 rounded-md p-0.5 text-amber-600 hover:bg-amber-100 hover:text-amber-900"
+                onClick={() => setStorageNotice('')}
+                type="button"
+              >
+                <X className="size-4" />
+              </button>
             </div>
           )}
           <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(4,minmax(138px,.62fr))_auto]">
@@ -1891,9 +1982,7 @@ export default function CourseExplorer({
                         .filter((schedule) => schedule.weeks.includes(week))
                         .map((schedule, scheduleIndex) => {
                           const color =
-                            COURSE_COLORS[
-                              Number(course.id) % COURSE_COLORS.length
-                            ];
+                            COURSE_COLORS[courseColorIndex(course.id)];
                           const conflict = currentWeekConflicts.has(course.id);
                           return (
                             <button
@@ -1951,8 +2040,8 @@ export default function CourseExplorer({
         </section>
 
         <footer className="mb-4 mt-2 flex flex-col gap-2 border-t border-slate-200 py-5 text-xs leading-5 text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <span>HIAS-CSA · {activeDataset.label}预选课辅助工具</span>
-          <span>HIAS-CSA · Course Selection Assistant</span>
+          <span>HIAS-CSAdeepseek · {activeDataset.label}预选课辅助工具</span>
+          <span>HIAS-CSAdeepseek · Course Selection Assistant</span>
         </footer>
       </div>
 
