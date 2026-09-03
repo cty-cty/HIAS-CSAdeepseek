@@ -17,6 +17,7 @@ import {
   formatWeekRanges,
   getConflictSlots,
   isCourse,
+  isMasterEnglishCourseName,
   isSchedule,
   parseBackupPayload,
   parseCourseDataset,
@@ -356,6 +357,14 @@ test('parseBackupPayload: 完整备份往返与容错', () => {
       ),
     /选课记录/,
   );
+});
+
+test('isMasterEnglishCourseName: 识别英语学位班级课', () => {
+  assert.equal(isMasterEnglishCourseName('英语A-02班-学术听说'), true);
+  assert.equal(isMasterEnglishCourseName('英语A-01班-学术读写'), true);
+  assert.equal(isMasterEnglishCourseName('英语B-01班-学术读写'), true);
+  assert.equal(isMasterEnglishCourseName('高级英语口语（1）-01班'), false);
+  assert.equal(isMasterEnglishCourseName('心理学与心理健康'), false);
 });
 
 test('数据事实: courses.json 不应有课程级冲突缺陷（回归锚点）', () => {

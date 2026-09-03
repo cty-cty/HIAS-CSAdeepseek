@@ -241,6 +241,13 @@ export function termIdFromLabel(label: string) {
   return normalized || 'imported-' + Date.now();
 }
 
+export const MASTER_ENGLISH_CREDITS = 3;
+
+// 硕士学位英语班级课程（英语A/英语B 分班、读写/听说类），免修认定后无需修读。
+export function isMasterEnglishCourseName(name: string) {
+  return /^英语[AB]-|^英语[AB]\d|^硕士学位英语/.test(name.trim());
+}
+
 export function categorizeRequirement(
   category: string,
   courseName = '',
@@ -390,6 +397,7 @@ export type BackupPayload = {
   selectedByTerm?: Record<string, string[]>;
   earnedCredits?: Record<string, number>;
   customDatasets?: CourseDataset[];
+  englishExemption?: boolean;
 };
 
 // Parse and validate a full backup file produced by "导出备份".
@@ -398,6 +406,7 @@ export function parseBackupPayload(text: string): {
   selectedByTerm: Record<string, string[]>;
   earnedCredits: Record<string, number>;
   customDatasets: CourseDataset[];
+  englishExemption: boolean;
 } {
   let parsed: unknown;
   try {
@@ -466,7 +475,8 @@ export function parseBackupPayload(text: string): {
   const hasContent =
     datasets.length > 0 ||
     Object.keys(selectedByTerm).length > 0 ||
-    Object.keys(earnedCredits).length > 0;
+    Object.keys(earnedCredits).length > 0 ||
+    record.englishExemption === true;
   if (!hasContent) {
     throw new Error('备份文件中没有可恢复的数据。');
   }
@@ -477,5 +487,6 @@ export function parseBackupPayload(text: string): {
     selectedByTerm,
     earnedCredits,
     customDatasets: datasets,
+    englishExemption: record.englishExemption === true,
   };
 }

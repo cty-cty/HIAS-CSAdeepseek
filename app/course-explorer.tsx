@@ -1,4 +1,5 @@
-'use client';
+﻿/* oxlint-disable react/react-compiler -- 巨型客户端组件触发编译器整体 bail，PreserveManualMemo 全量误报；React Compiler 未实际启用 */
+/* oxlint-enable 说明：其余文件仍启用该规则 */'use client';
 
 import {
   type ChangeEvent,
@@ -56,6 +57,8 @@ import {
   formatCredits,
   getConflictSlots,
   isCourse,
+  isMasterEnglishCourseName,
+  MASTER_ENGLISH_CREDITS,
   parseBackupPayload,
   parseCourseDataset,
   parseEarnedImport,
@@ -86,6 +89,7 @@ const ACTIVE_TERM_STORAGE_KEY = 'hias-active-term-v1';
 const SELECTED_BY_TERM_STORAGE_KEY = 'hias-selected-by-term-v1';
 const LEGACY_SELECTED_STORAGE_KEY = 'ucas-hangzhou-selected';
 const EARNED_CREDITS_STORAGE_KEY = 'hias-earned-credits-v1';
+const ENGLISH_EXEMPTION_STORAGE_KEY = 'hias-english-exempt-v1';
 const EMPTY_SELECTED_IDS: string[] = [];
 
 type ConflictPair = {
@@ -206,6 +210,7 @@ type RequirementBucket = {
   label: string;
   selected: number;
   earned: number;
+  exempt?: number;
   required: number | null;
   hint: string;
   nullText: string;
@@ -220,6 +225,19 @@ type PlanGap = {
   label: string;
   remaining: number;
 };
+
+// 免修(英语) + 历史已修 + 本学期已选 的累计构成文案
+function accumulatedComposition(
+  exempt: number,
+  earned: number,
+  selected: number,
+) {
+  const parts: string[] = [];
+  if (exempt > 0) parts.push(`英语免修 ${formatCredits(exempt)}`);
+  if (earned > 0) parts.push(`已修 ${formatCredits(earned)}`);
+  parts.push(`已选 ${formatCredits(selected)}`);
+  return parts.join(' + ');
+}
 
 export default function CourseExplorer({
   initialCourses: defaultCourses,
@@ -243,6 +261,7 @@ export default function CourseExplorer({
   const [earnedCredits, setEarnedCredits] = useState<Record<string, number>>(
     {},
   );
+  const [englishExemption, setEnglishExemption] = useState(false);
   const [earnedMessage, setEarnedMessage] = useState('');
   const [earnedError, setEarnedError] = useState('');
   const earnedFileRef = useRef<HTMLInputElement>(null);
@@ -300,6 +319,9 @@ export default function CourseExplorer({
     );
     const storedEarned = window.localStorage.getItem(
       EARNED_CREDITS_STORAGE_KEY,
+    );
+    const storedEnglishExemption = window.localStorage.getItem(
+      ENGLISH_EXEMPTION_STORAGE_KEY,
     );
 
     let parsedDatasets: CourseDataset[] = [];
@@ -383,6 +405,7 @@ export default function CourseExplorer({
       setActiveTermId(nextActiveTerm ?? DEFAULT_TERM_ID);
       setSelectedByTerm(parsedSelections);
       setEarnedCredits(parsedEarned);
+      setEnglishExemption(storedEnglishExemption === 'true');
       setStorageReady(true);
     });
   }, []);
@@ -418,6 +441,11 @@ export default function CourseExplorer({
     if (!storageReady) return;
     persistToStorage(EARNED_CREDITS_STORAGE_KEY, earnedCredits);
   }, [earnedCredits, persistToStorage, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    persistToStorage(ENGLISH_EXEMPTION_STORAGE_KEY, englishExemption);
+  }, [englishExemption, persistToStorage, storageReady]);
 
   const [showBackTop, setShowBackTop] = useState(false);
   const backTopShownRef = useRef(false);
@@ -565,6 +593,30 @@ export default function CourseExplorer({
     setEarnedError('');
   }
 
+  function toggleEnglishExemption() {
+    const next = !englishExemption;
+    setEnglishExemption(next);
+    if (next) {
+      const removedIds = selectedCourses
+        .filter((course) => isMasterEnglishCourseName(course.name))
+        .map((course) => course.id);
+      if (removedIds.length) {
+        setSelectedIdsForActive((current) =>
+          current.filter((id) => !removedIds.includes(id)),
+        );
+        setDataMessage(
+          `已开启硕士学位英语免修免考，自动移除了 ${removedIds.length} 门英语班级课程，公共必修按已获 3 学分计算。`,
+        );
+      } else {
+        setDataMessage(
+          '已开启硕士学位英语免修免考：公共必修课按已获 3 学分计算，英语班级课程不再进入排课推荐。',
+        );
+      }
+    } else {
+      setDataMessage('已关闭硕士学位英语免修免考。');
+    }
+  }
+
   function exportBackup() {
     const payload = {
       app: 'hias-csadeepseek',
@@ -574,6 +626,7 @@ export default function CourseExplorer({
       selectedByTerm,
       earnedCredits,
       customDatasets,
+      englishExemption,
     };
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(payload, null, 2)], {
@@ -609,7 +662,7 @@ export default function CourseExplorer({
         0,
       );
       const confirmed = window.confirm(
-        `备份内容：${backup.customDatasets.length} 套学期数据、${selectedCount} 门已选课程、${formatCredits(earnedSum)} 已修学分。恢复将覆盖当前浏览器中的全部本地数据，确定继续吗？`,
+        `备份内容：${backup.customDatasets.length} 套学期数据、${selectedCount} 门已选课程、${formatCredits(earnedSum)} 已修学分${backup.englishExemption ? '、英语免修已开启' : ''}。恢复将覆盖当前浏览器中的全部本地数据，确定继续吗？`,
       );
       if (!confirmed) return;
       const nextActiveTerm =
@@ -624,9 +677,10 @@ export default function CourseExplorer({
       setActiveTermId(nextActiveTerm);
       setSelectedByTerm(backup.selectedByTerm);
       setEarnedCredits(backup.earnedCredits);
+      setEnglishExemption(backup.englishExemption);
       clearFilters();
       setDetailCourse(null);
-      setDataMessage('备份已恢复：学期数据、选课记录与已修学分均已更新。');
+      setDataMessage('备份已恢复：学期数据、选课记录、已修学分与英语免修状态均已更新。');
     } catch (error) {
       setDataError(
         error instanceof Error ? error.message : '备份恢复失败，请检查文件格式。',
@@ -815,6 +869,12 @@ export default function CourseExplorer({
     (sum, credits) => sum + credits,
     0,
   );
+  const englishExemptCredits = englishExemption
+    ? MASTER_ENGLISH_CREDITS
+    : 0;
+  const effectiveEarnedTotal = earnedTotal + englishExemptCredits;
+  const effectiveAccumulatedCredits =
+    effectiveEarnedTotal + selectedCredits;
   const earnedByBucket = useMemo(() => {
     const totals = new Map<RequirementBucketId, number>();
     Object.entries(earnedCredits).forEach(([category, credits]) => {
@@ -841,6 +901,7 @@ export default function CourseExplorer({
         label: '公共必修课',
         selected: selected('publicRequired'),
         earned: earned('publicRequired'),
+        exempt: englishExemptCredits,
         required: activePlan.publicRequiredCredits,
         hint: '',
         nullText: '不限',
@@ -902,6 +963,7 @@ export default function CourseExplorer({
     activePlan,
     bucketOfCourse,
     earnedByBucket,
+    englishExemptCredits,
     planSeparatesInnovation,
     selectedCourses,
   ]);
@@ -941,6 +1003,9 @@ export default function CourseExplorer({
         .filter((course) => {
           if (busyIds.has(course.id)) return false;
           if (busyBaseNames.has(courseBaseName(course.name))) return false;
+          if (englishExemption && isMasterEnglishCourseName(course.name)) {
+            return false;
+          }
           if (bucketOfCourse(course) !== gap.id) return false;
           return !blockedCourses.some((blocked) =>
             coursesConflict(course, blocked),
@@ -975,6 +1040,7 @@ export default function CourseExplorer({
     return { rows: rows.slice(0, 10), unsatisfied };
   }, [
     bucketOfCourse,
+    englishExemption,
     initialCourses,
     requirementBuckets,
     selectedCourses,
@@ -983,7 +1049,7 @@ export default function CourseExplorer({
   const graduationPercent = Math.min(
     100,
     Math.round(
-      ((earnedTotal + selectedCredits) / activePlan.totalCredits) * 100,
+      (effectiveAccumulatedCredits / activePlan.totalCredits) * 100,
     ),
   );
   const examGroups = useMemo(
@@ -1296,12 +1362,16 @@ export default function CourseExplorer({
                 <div className="min-w-0 flex-1">
                   <p className="plan-kicker">毕业学分进度</p>
                   <p className="plan-total">
-                    {earnedTotal > 0
-                      ? `已修 ${formatCredits(earnedTotal)} + 已选 ${formatCredits(selectedCredits)}`
+                    {effectiveEarnedTotal > 0
+                      ? accumulatedComposition(
+                          englishExemptCredits,
+                          earnedTotal,
+                          selectedCredits,
+                        )
                       : `本学期已选 ${formatCredits(selectedCredits)} 学分`}
                   </p>
                   <p className="plan-sub">
-                    累计 {formatCredits(earnedTotal + selectedCredits)} / ≥
+                    累计 {formatCredits(effectiveAccumulatedCredits)} / ≥
                     {activePlan.totalCredits}
                   </p>
                 </div>
@@ -1342,7 +1412,7 @@ export default function CourseExplorer({
               >
                 <Trash2 /> 清空当前学期已选课程
               </Button>
-              {earnedTotal === 0 && (
+              {earnedTotal === 0 && englishExemptCredits === 0 && (
                 <button
                   className="plan-earned-hint"
                   onClick={() => setView('guide')}
@@ -1908,8 +1978,8 @@ export default function CourseExplorer({
               <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="font-bold">学分达成度</h3>
                 <span className="text-sm text-slate-500">
-                  {earnedTotal > 0
-                    ? `已修 ${formatCredits(earnedTotal)} + 本学期已选 ${formatCredits(selectedCredits)} / ≥${activePlan.totalCredits}`
+                  {effectiveEarnedTotal > 0
+                    ? `${accumulatedComposition(englishExemptCredits, earnedTotal, selectedCredits)} / ≥${activePlan.totalCredits}`
                     : `本学期已选 ${formatCredits(selectedCredits)} / ≥${activePlan.totalCredits}`}
                 </span>
               </div>
@@ -1919,8 +1989,7 @@ export default function CourseExplorer({
                   style={{
                     width: `${Math.min(
                       100,
-                      ((earnedTotal + selectedCredits) /
-                        activePlan.totalCredits) *
+                      (effectiveAccumulatedCredits / activePlan.totalCredits) *
                         100,
                     )}%`,
                   }}
@@ -1929,7 +1998,8 @@ export default function CourseExplorer({
               <div className="mt-4 grid gap-3">
                 {requirementBuckets.map((bucket) => {
                   const required = bucket.required;
-                  const effective = bucket.selected + bucket.earned;
+                  const effective =
+                    bucket.selected + bucket.earned + (bucket.exempt ?? 0);
                   const met = required !== null && effective >= required;
                   const ratio =
                     required !== null && required > 0
@@ -1939,10 +2009,23 @@ export default function CourseExplorer({
                     required !== null
                       ? Math.max(0, required - effective)
                       : 0;
-                  const composition =
-                    bucket.earned > 0
-                      ? `已修 ${formatCredits(bucket.earned)} + 本学期已选 ${formatCredits(bucket.selected)} · `
-                      : '';
+                  const compositionParts: string[] = [];
+                  if ((bucket.exempt ?? 0) > 0) {
+                    compositionParts.push(
+                      `英语免修 ${formatCredits(bucket.exempt ?? 0)}`,
+                    );
+                  }
+                  if (bucket.earned > 0) {
+                    compositionParts.push(`已修 ${formatCredits(bucket.earned)}`);
+                  }
+                  if (bucket.selected > 0) {
+                    compositionParts.push(
+                      `本学期已选 ${formatCredits(bucket.selected)}`,
+                    );
+                  }
+                  const composition = compositionParts.length
+                    ? `${compositionParts.join(' + ')} · `
+                    : '';
                   return (
                     <div key={bucket.id}>
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -1991,6 +2074,33 @@ export default function CourseExplorer({
                   {activePlan.publicRequiredNote}
                 </p>
               )}
+              <div className="mt-3 flex items-start justify-between gap-4 border-t border-slate-100 pt-3">
+                <div className="min-w-0 pr-2">
+                  <p className="text-sm font-semibold text-slate-700">
+                    硕士学位英语免修免考
+                  </p>
+                  <p className="mt-0.5 text-[0.74rem] leading-5 text-slate-500">
+                    若符合教务处认定条件（如考研英语一≥70、英语二≥75、CET-6≥600、雅思≥7、托福≥100）并已获准，请开启：公共必修课视作已获
+                    3 学分（成绩记 EX），英语班级课程不再排入课表与选课推荐，已选的英语班课会自动移出。
+                  </p>
+                </div>
+                <button
+                  aria-checked={englishExemption}
+                  aria-label="硕士学位英语免修免考开关"
+                  className={`relative mt-1 h-6 w-11 shrink-0 rounded-full transition-colors duration-200 ${
+                    englishExemption ? 'bg-emerald-500' : 'bg-slate-300'
+                  }`}
+                  onClick={toggleEnglishExemption}
+                  role="switch"
+                  type="button"
+                >
+                  <span
+                    className={`absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                      englishExemption ? 'translate-x-5' : ''
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
 
             <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
@@ -2008,6 +2118,11 @@ export default function CourseExplorer({
                       {formatCredits(earnedTotal)}
                     </strong>{' '}
                     学分
+                    {englishExemptCredits > 0 && (
+                      <span className="ml-1 text-xs text-emerald-600">
+                        （另含免修英语 {formatCredits(englishExemptCredits)}）
+                      </span>
+                    )}
                   </span>
                   <Button
                     className="h-9 rounded-lg border-rose-200 text-rose-600 hover:bg-rose-50"
