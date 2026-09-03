@@ -19,6 +19,7 @@ import {
   Download,
   FileSpreadsheet,
   GraduationCap,
+  History,
   Info,
   MapPin,
   Presentation,
@@ -1226,6 +1227,53 @@ export default function CourseExplorer({
                   <div className="credit-empty mt-4">
                     选择课程后，这里会汇总学分
                   </div>
+                )}
+                {earnedTotal > 0 && (
+                  <div className="mt-4 rounded-xl border border-white/15 bg-white/10 p-3">
+                    <div className="flex items-center justify-between gap-2 text-xs text-white/85">
+                      <span className="font-semibold tracking-wide">
+                        已修 + 本学期累计
+                      </span>
+                      <span>
+                        {formatCredits(earnedTotal + selectedCredits)} / ≥
+                        {activePlan.totalCredits} 学分
+                      </span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
+                      <div
+                        className="h-full rounded-full bg-emerald-300"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            ((earnedTotal + selectedCredits) /
+                              activePlan.totalCredits) *
+                              100,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-[0.7rem] leading-4 text-white/70">
+                      历史已修 {formatCredits(earnedTotal)} + 本学期已选{' '}
+                      {formatCredits(selectedCredits)}；按「{activePlan.label}
+                      」要求，详细分类进度见{' '}
+                      <button
+                        className="font-semibold text-white/90 underline underline-offset-2 hover:text-white"
+                        onClick={() => setView('guide')}
+                        type="button"
+                      >
+                        培养要求
+                      </button>
+                    </p>
+                  </div>
+                )}
+                {earnedTotal === 0 && (
+                  <button
+                    className="mt-3 flex items-center gap-1 text-[0.72rem] leading-4 text-white/60 underline-offset-2 hover:text-white hover:underline"
+                    onClick={() => setView('guide')}
+                    type="button"
+                  >
+                    <History className="size-3" /> 有上学期已修学分？在「培养要求」页导入后这里会显示累计进度
+                  </button>
                 )}
               </div>
               <div className="mt-6 grid grid-cols-2 gap-2.5">
