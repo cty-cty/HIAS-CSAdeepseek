@@ -95,6 +95,7 @@ const COURSE_DATASETS_STORAGE_KEY = 'hias-course-datasets-v1';
 const ACTIVE_TERM_STORAGE_KEY = 'hias-active-term-v1';
 const SELECTED_BY_TERM_STORAGE_KEY = 'hias-selected-by-term-v1';
 const LEGACY_SELECTED_STORAGE_KEY = 'ucas-hangzhou-selected';
+const EARNED_CREDITS_STORAGE_KEY = 'hias-earned-credits-v1';
 const EMPTY_SELECTED_IDS: string[] = [];
 
 type ConflictSlot = {
@@ -420,6 +421,7 @@ type RequirementBucket = {
   id: RequirementBucketId;
   label: string;
   selected: number;
+  earned: number;
   required: number | null;
   hint: string;
   nullText: string;
@@ -427,6 +429,16 @@ type RequirementBucket = {
 
 const DEGREE_CATEGORIES = ['专业核心课', '学科核心课', '专业课'];
 const NON_DEGREE_CATEGORIES = ['研讨课', '实验课'];
+const COURSE_CATEGORY_ORDER = [
+  '公共必修课',
+  '公共选修课',
+  '专业核心课',
+  '学科核心课',
+  '专业课',
+  '研讨课',
+  '实验课',
+  '创新创业课',
+];
 
 function categorizeRequirement(category: string): RequirementBucketId {
   if (category === '公共必修课') return 'publicRequired';
@@ -435,6 +447,72 @@ function categorizeRequirement(category: string): RequirementBucketId {
   if (NON_DEGREE_CATEGORIES.includes(category)) return 'professionalNonDegree';
   if (category === '创新创业课') return 'innovation';
   return 'other';
+}
+
+// Parse an "already earned" credits file. Accepts:
+//   - an array of course objects (needs `category` + positive `credits`),
+//   - `{ courses: [...] }` (e.g. a term dataset),
+//   - a plain `{ category: credits }` map.
+// Returns totals grouped by course category.
+function parseEarnedImport(text: string): Record<string, number> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(
+      '文件不是有效的 JSON。请提供已修课程数组、含 courses 字段的对象，或 {课程属性: 学分} 映射。',
+    );
+  }
+
+  const result: Record<string, number> = {};
+  const addCourse = (item: unknown): boolean => {
+    if (!item || typeof item !== 'object') return false;
+    const record = item as { category?: unknown; credits?: unknown };
+    if (typeof record.category !== 'string' || !record.category.trim()) {
+      return false;
+    }
+    if (
+      typeof record.credits !== 'number' ||
+      !Number.isFinite(record.credits) ||
+      record.credits <= 0
+    ) {
+      return false;
+    }
+    const category = record.category.trim();
+    result[category] = (result[category] ?? 0) + record.credits;
+    return true;
+  };
+
+  if (Array.isArray(parsed)) {
+    if (!parsed.some(addCourse)) {
+      throw new Error('数组中没有识别到带 category 与正数 credits 的已修课程。');
+    }
+  } else if (parsed && typeof parsed === 'object') {
+    const record = parsed as Record<string, unknown>;
+    if (Array.isArray(record.courses)) {
+      if (!record.courses.some(addCourse)) {
+        throw new Error('courses 中没有识别到带 category 与正数 credits 的已修课程。');
+      }
+    } else {
+      const entries = Object.entries(record).filter(
+        ([category, credits]) =>
+          category.trim() &&
+          typeof credits === 'number' &&
+          Number.isFinite(credits) &&
+          credits > 0,
+      );
+      if (!entries.length) {
+        throw new Error('对象既不是 {课程属性: 学分} 映射，也没有可用的 courses 数组。');
+      }
+      entries.forEach(([category, credits]) => {
+        result[category.trim()] =
+          (result[category.trim()] ?? 0) + (credits as number);
+      });
+    }
+  } else {
+    throw new Error('文件内容无法识别为已修学分数据。');
+  }
+  return result;
 }
 
 export default function CourseExplorer({
@@ -456,6 +534,12 @@ export default function CourseExplorer({
   const [dataMessage, setDataMessage] = useState('');
   const [dataError, setDataError] = useState('');
   const [storageNotice, setStorageNotice] = useState('');
+  const [earnedCredits, setEarnedCredits] = useState<Record<string, number>>(
+    {},
+  );
+  const [earnedMessage, setEarnedMessage] = useState('');
+  const [earnedError, setEarnedError] = useState('');
+  const earnedFileRef = useRef<HTMLInputElement>(null);
   const [onlySelected, setOnlySelected] = useState(false);
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
   const [view, setView] = useState<'courses' | 'guide' | 'exams' | 'timetable'>(
@@ -506,6 +590,9 @@ export default function CourseExplorer({
     );
     const legacySelected = window.localStorage.getItem(
       LEGACY_SELECTED_STORAGE_KEY,
+    );
+    const storedEarned = window.localStorage.getItem(
+      EARNED_CREDITS_STORAGE_KEY,
     );
 
     let parsedDatasets: CourseDataset[] = [];
@@ -560,6 +647,25 @@ export default function CourseExplorer({
       }
     }
 
+    let parsedEarned: Record<string, number> = {};
+    if (storedEarned) {
+      try {
+        const parsed = JSON.parse(storedEarned);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          parsedEarned = Object.fromEntries(
+            Object.entries(parsed as Record<string, unknown>).filter(
+              ([, credits]) =>
+                typeof credits === 'number' &&
+                Number.isFinite(credits) &&
+                credits > 0,
+            ),
+          ) as Record<string, number>;
+        }
+      } catch {
+        window.localStorage.removeItem(EARNED_CREDITS_STORAGE_KEY);
+      }
+    }
+
     const nextActiveTerm =
       storedActiveTerm === DEFAULT_TERM_ID ||
       parsedDatasets.some((dataset) => dataset.id === storedActiveTerm)
@@ -569,6 +675,7 @@ export default function CourseExplorer({
       setCustomDatasets(parsedDatasets);
       setActiveTermId(nextActiveTerm ?? DEFAULT_TERM_ID);
       setSelectedByTerm(parsedSelections);
+      setEarnedCredits(parsedEarned);
       setStorageReady(true);
     });
   }, []);
@@ -599,6 +706,11 @@ export default function CourseExplorer({
     if (!storageReady) return;
     persistToStorage(SELECTED_BY_TERM_STORAGE_KEY, selectedByTerm);
   }, [persistToStorage, selectedByTerm, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    persistToStorage(EARNED_CREDITS_STORAGE_KEY, earnedCredits);
+  }, [earnedCredits, persistToStorage, storageReady]);
 
   const setSelectedIdsForActive = useCallback(
     (next: string[] | ((current: string[]) => string[])) => {
@@ -669,6 +781,63 @@ export default function CourseExplorer({
           : '课程数据读取失败，请检查文件格式。',
       );
     }
+  }
+
+  async function handleEarnedImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setEarnedError('');
+    setEarnedMessage('');
+    try {
+      const parsed = parseEarnedImport(await file.text());
+      const totalImported = Object.values(parsed).reduce(
+        (sum, credits) => sum + credits,
+        0,
+      );
+      setEarnedCredits((current) => {
+        const next = { ...current };
+        Object.entries(parsed).forEach(([category, credits]) => {
+          next[category] = (next[category] ?? 0) + credits;
+        });
+        return next;
+      });
+      const detail = Object.entries(parsed)
+        .map(([category, credits]) => `${category} ${formatCredits(credits)}`)
+        .join('、');
+      setEarnedMessage(
+        `已累计导入 ${formatCredits(totalImported)} 学分（${detail}），已计入上方达成度进度。`,
+      );
+    } catch (error) {
+      setEarnedError(
+        error instanceof Error
+          ? error.message
+          : '已修学分数据读取失败，请检查文件格式。',
+      );
+    }
+  }
+
+  function updateEarnedCategory(category: string, raw: string) {
+    const credits = Number(raw);
+    setEarnedCredits((current) => {
+      const next = { ...current };
+      if (raw.trim() !== '' && Number.isFinite(credits) && credits > 0) {
+        next[category] = Math.round(credits * 100) / 100;
+      } else {
+        delete next[category];
+      }
+      return next;
+    });
+  }
+
+  function clearEarned() {
+    if (!earnedTotal) return;
+    const confirmed = window.confirm('确定清空全部历史已修学分记录吗？');
+    if (!confirmed) return;
+    setEarnedCredits({});
+    setEarnedMessage('');
+    setEarnedError('');
   }
 
   useEffect(() => {
@@ -827,6 +996,18 @@ export default function CourseExplorer({
         activePlan.professionalCourses.includes(course.name),
     )
     .reduce((sum, course) => sum + course.credits, 0);
+  const earnedTotal = Object.values(earnedCredits).reduce(
+    (sum, credits) => sum + credits,
+    0,
+  );
+  const earnedByBucket = useMemo(() => {
+    const totals = new Map<RequirementBucketId, number>();
+    Object.entries(earnedCredits).forEach(([category, credits]) => {
+      const bucket = categorizeRequirement(category);
+      totals.set(bucket, (totals.get(bucket) ?? 0) + credits);
+    });
+    return totals;
+  }, [earnedCredits]);
   const requirementBuckets = useMemo<RequirementBucket[]>(() => {
     const selectedByBucket = new Map<RequirementBucketId, number>();
     selectedCourses.forEach((course) => {
@@ -836,12 +1017,15 @@ export default function CourseExplorer({
         (selectedByBucket.get(bucket) ?? 0) + course.credits,
       );
     });
-    const sum = (id: RequirementBucketId) => selectedByBucket.get(id) ?? 0;
+    const selected = (id: RequirementBucketId) =>
+      selectedByBucket.get(id) ?? 0;
+    const earned = (id: RequirementBucketId) => earnedByBucket.get(id) ?? 0;
     const buckets: RequirementBucket[] = [
       {
         id: 'publicRequired',
         label: '公共必修课',
-        selected: sum('publicRequired'),
+        selected: selected('publicRequired'),
+        earned: earned('publicRequired'),
         required: activePlan.publicRequiredCredits,
         hint: '',
         nullText: '不限',
@@ -849,7 +1033,8 @@ export default function CourseExplorer({
       {
         id: 'degree',
         label: '专业学位课',
-        selected: sum('degree'),
+        selected: selected('degree'),
+        earned: earned('degree'),
         required: activePlan.degreeCourseCredits,
         hint: `其中至少 ${activePlan.coreMinimum} 门核心课、${activePlan.professionalMinimum} 门专业课`,
         nullText: '不限',
@@ -857,7 +1042,8 @@ export default function CourseExplorer({
       {
         id: 'professionalNonDegree',
         label: '专业非学位课',
-        selected: sum('professionalNonDegree'),
+        selected: selected('professionalNonDegree'),
+        earned: earned('professionalNonDegree'),
         required: activePlan.professionalNonDegreeCredits,
         hint: '含研讨课与实验课',
         nullText: '不限',
@@ -865,7 +1051,8 @@ export default function CourseExplorer({
       {
         id: 'publicElective',
         label: '公共选修课',
-        selected: sum('publicElective'),
+        selected: selected('publicElective'),
+        earned: earned('publicElective'),
         required: activePlan.publicElectiveCredits,
         hint: '',
         nullText: '不限',
@@ -873,24 +1060,26 @@ export default function CourseExplorer({
       {
         id: 'innovation',
         label: '创新创业课',
-        selected: sum('innovation'),
+        selected: selected('innovation'),
+        earned: earned('innovation'),
         required: activePlan.innovationCredits,
         hint: '',
         nullText: '未单列',
       },
     ];
-    if (sum('other') > 0) {
+    if (selected('other') + earned('other') > 0) {
       buckets.push({
         id: 'other',
         label: '未归类课程',
-        selected: sum('other'),
+        selected: selected('other'),
+        earned: earned('other'),
         required: null,
         hint: '课程属性未匹配到上述类别',
         nullText: '未计入',
       });
     }
     return buckets;
-  }, [selectedCourses, activePlan]);
+  }, [activePlan, earnedByBucket, selectedCourses]);
   const examGroups = useMemo(
     () =>
       EXAM_BUCKETS.map((bucket) => ({
@@ -1764,8 +1953,9 @@ export default function CourseExplorer({
               <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="font-bold">学分达成度</h3>
                 <span className="text-sm text-slate-500">
-                  已选总学分 {formatCredits(selectedCredits)} / ≥
-                  {activePlan.totalCredits}
+                  {earnedTotal > 0
+                    ? `已修 ${formatCredits(earnedTotal)} + 本学期已选 ${formatCredits(selectedCredits)} / ≥${activePlan.totalCredits}`
+                    : `本学期已选 ${formatCredits(selectedCredits)} / ≥${activePlan.totalCredits}`}
                 </span>
               </div>
               <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
@@ -1774,7 +1964,9 @@ export default function CourseExplorer({
                   style={{
                     width: `${Math.min(
                       100,
-                      (selectedCredits / activePlan.totalCredits) * 100,
+                      ((earnedTotal + selectedCredits) /
+                        activePlan.totalCredits) *
+                        100,
                     )}%`,
                   }}
                 />
@@ -1782,23 +1974,28 @@ export default function CourseExplorer({
               <div className="mt-4 grid gap-3">
                 {requirementBuckets.map((bucket) => {
                   const required = bucket.required;
-                  const met = required !== null && bucket.selected >= required;
+                  const effective = bucket.selected + bucket.earned;
+                  const met = required !== null && effective >= required;
                   const ratio =
                     required !== null && required > 0
-                      ? bucket.selected / required
+                      ? effective / required
                       : 0;
                   const remaining =
                     required !== null
-                      ? Math.max(0, required - bucket.selected)
+                      ? Math.max(0, required - effective)
                       : 0;
+                  const composition =
+                    bucket.earned > 0
+                      ? `已修 ${formatCredits(bucket.earned)} + 本学期已选 ${formatCredits(bucket.selected)} · `
+                      : '';
                   return (
                     <div key={bucket.id}>
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <span className="font-medium">{bucket.label}</span>
                         <span className="text-sm text-slate-600">
                           {required === null
-                            ? `${formatCredits(bucket.selected)} 学分 · ${bucket.nullText}`
-                            : `${formatCredits(bucket.selected)} / ${formatCredits(required)} 学分`}
+                            ? `${formatCredits(effective)} 学分 · ${bucket.nullText}`
+                            : `${formatCredits(effective)} / ${formatCredits(required)} 学分`}
                         </span>
                       </div>
                       {required !== null ? (
@@ -1818,12 +2015,14 @@ export default function CourseExplorer({
                               met ? 'text-emerald-600' : 'text-amber-600'
                             }`}
                           >
+                            {composition}
                             {met ? '已达标' : `还差 ${formatCredits(remaining)} 学分`}
                             {bucket.hint ? ` · ${bucket.hint}` : ''}
                           </p>
                         </>
                       ) : (
                         <p className="mt-1 text-xs leading-5 text-slate-500">
+                          {composition}
                           {bucket.nullText}
                           {bucket.hint ? ` · ${bucket.hint}` : ''}
                         </p>
@@ -1831,6 +2030,103 @@ export default function CourseExplorer({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-bold">历史已修学分</h3>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                    记录上学期等已完成课程的学分，计入上方达成度；不影响本学期课表、冲突检查与选课统计。
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-slate-600">
+                    已修合计{' '}
+                    <strong className="text-slate-900">
+                      {formatCredits(earnedTotal)}
+                    </strong>{' '}
+                    学分
+                  </span>
+                  <Button
+                    className="h-9 rounded-lg border-rose-200 text-rose-600 hover:bg-rose-50"
+                    disabled={!earnedTotal}
+                    onClick={clearEarned}
+                    variant="outline"
+                  >
+                    <Trash2 /> 清空
+                  </Button>
+                </div>
+              </div>
+              <input
+                accept=".json,application/json"
+                className="sr-only"
+                onChange={handleEarnedImport}
+                ref={earnedFileRef}
+                type="file"
+              />
+              <Button
+                className="mt-3 h-9 rounded-lg border-blue-200 text-blue-700 hover:bg-blue-50"
+                onClick={() => earnedFileRef.current?.click()}
+                variant="outline"
+              >
+                <FileSpreadsheet /> 导入上学期课程数据
+              </Button>
+              <span className="ml-2 text-xs leading-5 text-slate-400">
+                支持课程 JSON 数组（自动按课程属性汇总），或 {`{`}课程属性: 学分{`}`}{' '}
+                映射
+              </span>
+              {(earnedMessage || earnedError) && (
+                <div
+                  className={`mt-3 rounded-xl border px-3 py-2 text-xs leading-5 ${
+                    earnedError
+                      ? 'border-rose-200 bg-rose-50 text-rose-700'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  }`}
+                  role={earnedError ? 'alert' : 'status'}
+                >
+                  {earnedError || earnedMessage}
+                </div>
+              )}
+              <div className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+                {[
+                  ...new Set([
+                    ...COURSE_CATEGORY_ORDER.filter((category) =>
+                      categories.includes(category),
+                    ),
+                    ...categories.filter(
+                      (category) => !COURSE_CATEGORY_ORDER.includes(category),
+                    ),
+                    ...Object.keys(earnedCredits),
+                  ]),
+                ].map((category) => (
+                  <label
+                    className="flex items-center justify-between gap-3 text-sm text-slate-600"
+                    key={category}
+                  >
+                    <span>{category}</span>
+                    <span className="flex items-center gap-1">
+                      <Input
+                        aria-label={`${category}已修学分`}
+                        className="h-9 w-24 rounded-lg text-right"
+                        min={0}
+                        onChange={(event) =>
+                          updateEarnedCategory(category, event.target.value)
+                        }
+                        placeholder="0"
+                        step={0.5}
+                        type="number"
+                        value={
+                          earnedCredits[category]
+                            ? String(earnedCredits[category])
+                            : ''
+                        }
+                      />
+                      <span className="text-xs text-slate-400">学分</span>
+                    </span>
+                  </label>
+                ))}
               </div>
             </div>
 
