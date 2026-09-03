@@ -85,6 +85,11 @@ import { PROGRAM_PLANS } from '@/app/program-plans';
 
 const DEFAULT_TERM_ID = '2026-fall';
 const DEFAULT_TERM_LABEL = '2026—2027学年(秋)第一学期';
+// 当前学年后续学期（暂无数据，选到即显示"无课程数据"，可导入覆盖）
+const EMPTY_TERMS: { id: string; label: string }[] = [
+  { id: '2026-2027-spring', label: '2026—2027学年(春)第二学期' },
+  { id: '2026-2027-summer', label: '2026—2027学年(夏)第三学期' },
+];
 const COURSE_DATASETS_STORAGE_KEY = 'hias-course-datasets-v1';
 const ACTIVE_TERM_STORAGE_KEY = 'hias-active-term-v1';
 const SELECTED_BY_TERM_STORAGE_KEY = 'hias-selected-by-term-v1';
@@ -280,22 +285,39 @@ export default function CourseExplorer({
   const activeDataset = customDatasets.find(
     (dataset) => dataset.id === activeTermId,
   ) ?? {
-    id: DEFAULT_TERM_ID,
-    label: DEFAULT_TERM_LABEL,
-    courses: defaultCourses,
+    ...(EMPTY_TERMS.find((term) => term.id === activeTermId) ?? {
+      id: DEFAULT_TERM_ID,
+      label: DEFAULT_TERM_LABEL,
+    }),
+    courses:
+      activeTermId === DEFAULT_TERM_ID ? defaultCourses : [],
     updatedAt: '',
   };
   const initialCourses = activeDataset.courses;
   const availableDatasets = useMemo(
-    () => [
-      customDatasets.find((dataset) => dataset.id === DEFAULT_TERM_ID) ?? {
-        id: DEFAULT_TERM_ID,
-        label: DEFAULT_TERM_LABEL,
-        courses: defaultCourses,
-        updatedAt: '',
-      },
-      ...customDatasets.filter((dataset) => dataset.id !== DEFAULT_TERM_ID),
-    ],
+    () => {
+      const list: CourseDataset[] = [
+        customDatasets.find((dataset) => dataset.id === DEFAULT_TERM_ID) ?? {
+          id: DEFAULT_TERM_ID,
+          label: DEFAULT_TERM_LABEL,
+          courses: defaultCourses,
+          updatedAt: '',
+        },
+      ];
+      for (const term of EMPTY_TERMS) {
+        list.push(
+          customDatasets.find((dataset) => dataset.id === term.id) ?? {
+            ...term,
+            courses: [],
+            updatedAt: '',
+          },
+        );
+      }
+      customDatasets.forEach((dataset) => {
+        if (!list.some((item) => item.id === dataset.id)) list.push(dataset);
+      });
+      return list;
+    },
     [customDatasets, defaultCourses],
   );
   const selectedIds = selectedByTerm[activeTermId] ?? EMPTY_SELECTED_IDS;
@@ -1938,6 +1960,26 @@ export default function CourseExplorer({
                   );
                 })}
               </div>
+            ) : !initialCourses.length ? (
+              <div className="empty-state">
+                <div className="empty-art empty-art-amber">
+                  <CalendarDays />
+                </div>
+                <h3>本学期暂无课程数据</h3>
+                <p>
+                  「{compactTermLabel(activeDataset.label)}
+                  」还没有录入课表。可点击右上角「一键更新课程数据」导入该学期 JSON，
+                  或切换回已有数据的学期。
+                </p>
+                <Button
+                  onClick={() => {
+                    switchTerm(DEFAULT_TERM_ID);
+                  }}
+                  variant="outline"
+                >
+                  切回 {compactTermLabel(DEFAULT_TERM_LABEL)}
+                </Button>
+              </div>
             ) : (
               <div className="empty-state">
                 <div className="empty-art empty-art-blue">
@@ -1970,7 +2012,7 @@ export default function CourseExplorer({
                 <p>PROGRAM REQUIREMENTS</p>
                 <h2>物光学院培养方案参考</h2>
                 <div className="section-description">
-                  根据《物光学院2026—2027年课程设置》整理，仅显示当前秋季课表中可对应的课程。
+                  根据《物光学院2026—2027年课程设置》整理，仅显示当前学期课表中可对应的课程。
                 </div>
               </div>
               <label className="min-w-64 text-sm font-medium text-slate-600">
