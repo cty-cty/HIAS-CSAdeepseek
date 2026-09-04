@@ -1,5 +1,8 @@
 // 依据《研究生课程学习与选课须知（2026-2027 学年）》（教务处）与
 // 《物光学院 2026-2027 年课程设置》整理。正式安排请以教务处最新通知为准。
+'use client';
+
+import { useEffect, useState } from 'react';
 import {
   BellRing,
   BookCheck,
@@ -14,31 +17,42 @@ import {
 
 const FALL_START = new Date('2026-09-04T12:30:00+08:00');
 const FALL_END = new Date('2026-09-18T12:30:00+08:00');
-// 页面加载时的当前时刻（加载后不再实时刷新，避免渲染期不定值）
-const NOW = Date.now();
 
 type WindowState = 'soon' | 'open' | 'over';
 
 function enrollmentWindowState(now: number): WindowState {
   if (now < FALL_START.getTime()) return 'soon';
-  if (now <= FALL_END.getTime()) return 'open';
+  if (now < FALL_END.getTime()) return 'open';
   return 'over';
 }
 
 function formatRemain(ms: number) {
-  const totalHours = Math.max(1, Math.ceil(ms / 3_600_000));
+  if (ms <= 0) return '即将截止';
+  const totalMinutes = Math.ceil(ms / 60_000);
+  if (totalMinutes < 90) return `${totalMinutes} 分钟`;
+  const totalHours = Math.ceil(ms / 3_600_000);
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
   return days > 0 ? `${days} 天 ${hours} 小时` : `${hours} 小时`;
 }
 
+function useNow(intervalMs = 30_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
 function WindowBadge() {
-  const state = enrollmentWindowState(NOW);
+  const now = useNow();
+  const state = enrollmentWindowState(now);
   if (state === 'soon') {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
         <TimerReset className="size-3.5" />
-        距选课开始 {formatRemain(FALL_START.getTime() - NOW)}
+        距选课开始 {formatRemain(FALL_START.getTime() - now)}
       </span>
     );
   }
@@ -46,7 +60,7 @@ function WindowBadge() {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
         <BellRing className="size-3.5" />
-        选课进行中 · 截止 {formatRemain(FALL_END.getTime() - NOW)}后
+        选课进行中 · 截止 {formatRemain(FALL_END.getTime() - now)}后
       </span>
     );
   }
@@ -115,8 +129,8 @@ export default function EnrollmentNotice() {
           ))}
         </div>
         <p className="mt-3 rounded-xl bg-blue-50/70 px-3 py-2 text-xs leading-5 text-blue-800">
-          每学期学分建议：秋季、春季学期选课均不低于 10
-          学分（不含《人文系列讲座（HIAS讲堂）》《科学前沿讲座》）；夏季学期视需求选课。
+          选课学分要求：秋季学期、春季学期选课均不低于 10
+          学分（不含《人文系列讲座（HIAS讲堂）》《科学前沿讲座》学分）；夏季学期视需求选课。
         </p>
       </div>
 
@@ -129,13 +143,16 @@ export default function EnrollmentNotice() {
             <li>
               硕士生与直博生：至少修读本一级学科或专业学位领域
               <strong> 2 门核心课（学科核心课/专业核心课）+ 2 门专业课 </strong>
-              作为学位课（核心课、专业课须在系统中勾选为学位课）。
+              作为学位课（核心课、专业课须在系统中勾选为学位课，本工具的「学位属性」开关即对应此项）。
             </li>
             <li>
-              核心课包含学科核心课与专业核心课；本工具「培养要求」页按各方向课程库统计覆盖情况。
+              核心课包含学科核心课与专业核心课；本工具「培养要求」页只把被标记为“学位课”的核心课/专业课计入学位课门数与学分。
             </li>
             <li>
-              研讨课、实验课、实践课和两类讲座只能作为非学位课（专业选修课）修读。
+              研讨课、实验课、实践课和两类讲座只能作为非学位课（专业选修课）修读，不能勾选为学位课。
+            </li>
+            <li>
+              学科核心课/专业核心课/专业课可以作为学位课，也可以作为非学位课；具体按系统勾选与培养方案认定。
             </li>
             <li>
               普博生须至少选择 4
@@ -151,10 +168,14 @@ export default function EnrollmentNotice() {
           </h3>
           <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
             <li>
-              研一秋季须修读《学术道德与学术写作规范》《自然辩证法概论》；硕士学位英语有免修免考、慕课、英语
+              <strong>《新时代中国特色社会主义理论与实践》《自然辩证法概论》必须在一年级秋季学期修读。</strong>
+              《学术道德与学术写作规范》根据实际开课安排修读（秋季、春季均可开设，不限于秋季）。
+            </li>
+            <li>
+              硕士学位英语有免修免考、慕课、英语
               A 三条路径，符合条件（如考研英语一≥70、CET-6≥600、雅思≥7、托福≥100）可申请免修，成绩记为
               EX 并直接获得学分（可在页面顶部汇总卡的「英语免修免考」开关一键开启：公共必修课自动计入
-              3 学分，英语班级课程不再排课/推荐）。
+              3 学分，英语班级课程不再排课/推荐；是否取得免修资格以学校最终审核结果为准）。
             </li>
             <li>
               硕士修读《中国马克思主义与当代》《博士学位英语》不计入毕业要求的课程学习学分（直博生除外，见培养要求页注）。
@@ -184,18 +205,41 @@ export default function EnrollmentNotice() {
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="flex items-center gap-2 font-bold">
-            <TriangleAlert className="size-4 text-rose-600" /> 考核与红线提醒
+            <TriangleAlert className="size-4 text-rose-600" /> 考核与补考规则
           </h3>
           <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
             <li>
-              成绩低于 60 分/不及格可申请补考一次或重修一次；思政课不及格只能重修；补考通过按
+              一般课程：成绩低于 60 分/不及格可申请补考一次或重修一次；思政课不及格只能重修；补考通过按
               “60/及格/通过”记载。
+            </li>
+            <li>
+              <strong>硕士学位英语执行公共外语专门规定，补考规则与普通课程不同</strong>
+              ——请勿直接把“一次补考”规则套用于硕士学位英语，相关安排以教务处/外语教学部门的专门通知为准。
             </li>
             <li>缓考批复后两年内未取得成绩，自两年起课程自动计“0/不及格/未通过”。</li>
             <li>
               硕士生一学期两门学位课不及格、经重修仍有一门不及格，或累计三门学位课不及格，将按《学生管理规定》处理——请合理控制每学期选课量。
             </li>
             <li>禁止囤课卖课、使用插件等非正常方式选课；谨防冒充教务人员的诈骗。</li>
+          </ul>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <h3 className="flex items-center gap-2 font-bold">
+            <Info className="size-4 text-sky-600" /> 课程评估、外选课与变更审核
+          </h3>
+          <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
+            <li>
+              课程评估：课程进行到约 2/3 时开始课程评估；授课教师本人授课学时完成一半后开始教师评估。未按规定完成评估可能影响成绩在线查询。
+            </li>
+            <li>
+              外选课：原则上仅限核心课；每人每学年至多 2
+              门；需填写外选课申请表并经审批；成绩需由开课单位教务部门出具正式成绩单。
+            </li>
+            <li>
+              网络选课结束后，增选、退课、学位课/非学位课属性变更均须在线申请并完成相关审核：增选应在课程开课两周内提出；退课应在课程学时完成一半前提出；学位属性变更应在课程考核前 10 天提出。
+            </li>
+            <li>申请提交后，请提醒相关审核角色在规定期限内完成审核。</li>
           </ul>
         </div>
       </div>
@@ -221,7 +265,10 @@ export default function EnrollmentNotice() {
           </div>
           <div className="flex items-start gap-2 rounded-xl bg-slate-50 px-3 py-2">
             <Info className="mt-1 size-4 shrink-0 text-slate-400" />
-            <span>考试与成绩信息：jwxk.ucas.ac.cn；通知发布：学在 HIAS 公众号</span>
+            <span>
+              考试信息查询：UCAS 课程考试信息（jwxk.ucas.ac.cn）；成绩查询：以
+              SEP/学校规定入口为准；通知发布：学在 HIAS 公众号。
+            </span>
           </div>
         </div>
       </div>

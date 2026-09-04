@@ -1,8 +1,11 @@
 import { createRoot } from 'react-dom/client';
 
+import type { Course } from '@/lib/course-tools';
 import CourseExplorer from '@/app/course-explorer';
-import courses from '@/app/courses.json';
+import coursesData from '@/app/courses.json';
 import '@/app/globals.css';
+
+const courses = coursesData as Course[];
 
 const root = document.getElementById('root');
 

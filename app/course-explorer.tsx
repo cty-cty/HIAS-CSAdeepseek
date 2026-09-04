@@ -44,14 +44,20 @@ import {
   type ConflictSlot,
   type Course,
   type CourseDataset,
+  type DegreeRole,
   type RequirementBucketId,
   type Schedule,
+  bucketForRole,
   categorizeRequirement,
   compactTermLabel,
   computeCourseRecommendations,
   courseBaseName,
   courseColorIndex,
   courseConflictsInWeek,
+  courseDegreeRoleKind,
+  courseMatchesSubject,
+  courseSubjectDisplay,
+  courseSubjectNames,
   coursesConflict,
   COURSE_CATEGORY_ORDER,
   csvCell,
@@ -59,6 +65,7 @@ import {
   formatCredits,
   getConflictSlots,
   isCourse,
+  isDegreeRoleSettable,
   isMasterEnglishCourseName,
   MASTER_ENGLISH_CREDITS,
   parseBackupPayload,
@@ -99,6 +106,7 @@ const SELECTED_BY_TERM_STORAGE_KEY = 'hias-selected-by-term-v1';
 const LEGACY_SELECTED_STORAGE_KEY = 'ucas-hangzhou-selected';
 const EARNED_CREDITS_STORAGE_KEY = 'hias-earned-credits-v1';
 const ENGLISH_EXEMPTION_STORAGE_KEY = 'hias-english-exempt-v1';
+const DEGREE_ROLES_STORAGE_KEY = 'hias-degree-roles-v1';
 const EMPTY_SELECTED_IDS: string[] = [];
 
 type ConflictPair = {
@@ -231,12 +239,74 @@ type RequirementBucket = {
   required: number | null;
   hint: string;
   nullText: string;
+  /** 专业学位课专属：已选学位课/待确认属性的门数与“来源集合”命中数。 */
+  role?: {
+    coreDegree: number;
+    proDegree: number;
+    fromDegree: number;
+    pending: number;
+  };
 };
+
+type DegreeRoleOption = 'degree' | 'nonDegree';
+
+/**
+ * 学位属性切换：学位课 / 非学位课 二选一，再次点击当前项可取消（回到待确认）。
+ * 仅对“可设属性”的核心课/专业课展示；研讨/实验等强制非学位课不经过此控件。
+ */
+function DegreeRoleControl({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: DegreeRole | null;
+  onChange: (role: DegreeRole | null) => void;
+  compact?: boolean;
+}) {
+  const options: { role: DegreeRoleOption; label: string }[] = [
+    { role: 'degree', label: '学位课' },
+    { role: 'nonDegree', label: '非学位课' },
+  ];
+  const cls = compact
+    ? 'rounded-md px-1.5 py-0.5 text-[0.7rem]'
+    : 'rounded-lg px-2.5 py-1 text-xs';
+  return (
+    <fieldset
+      className="inline-flex items-center gap-1"
+      aria-label="学位课属性"
+    >
+      <legend className="sr-only">学位课属性</legend>
+      {options.map((option) => {
+        const active = value === option.role;
+        return (
+          <button
+            aria-pressed={active}
+            className={`${cls} border font-medium transition ${
+              active
+                ? option.role === 'degree'
+                  ? 'border-emerald-500 bg-emerald-500 text-white'
+                  : 'border-amber-500 bg-amber-500 text-white'
+                : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
+            }`}
+            key={option.role}
+            onClick={() => onChange(active ? null : option.role)}
+            type="button"
+          >
+            {active && <span className="mr-0.5" aria-hidden="true">✓ </span>}
+            {option.label}
+          </button>
+        );
+      })}
+    </fieldset>
+  );
+}
 
 type PlanSuggestion = {
   course: Course;
   gapLabel: string;
   reason: string;
+  /** 该建议对应的需求桶（用于加入时自动设置学位属性）。 */
+  bucket: RequirementBucketId;
 };
 
 type PlanGap = {
@@ -282,6 +352,11 @@ export default function CourseExplorer({
   const [englishExemption, setEnglishExemption] = useState(false);
   const [earnedMessage, setEarnedMessage] = useState('');
   const [earnedError, setEarnedError] = useState('');
+  // 已选课程的“学位属性”标记：degree = 作为学位课，nonDegree = 作为非学位课。
+  // 结构：{ [termId]: { [courseId]: DegreeRole } }，仅保存用户显式选择。
+  const [degreeRolesByTerm, setDegreeRolesByTerm] = useState<
+    Record<string, Record<string, DegreeRole>>
+  >({});
   const earnedFileRef = useRef<HTMLInputElement>(null);
   const backupFileRef = useRef<HTMLInputElement>(null);
   const [onlySelected, setOnlySelected] = useState(false);
@@ -358,6 +433,9 @@ export default function CourseExplorer({
     const storedEnglishExemption = window.localStorage.getItem(
       ENGLISH_EXEMPTION_STORAGE_KEY,
     );
+    const storedDegreeRoles = window.localStorage.getItem(
+      DEGREE_ROLES_STORAGE_KEY,
+    );
 
     let parsedDatasets: CourseDataset[] = [];
     if (storedDatasets) {
@@ -430,6 +508,35 @@ export default function CourseExplorer({
       }
     }
 
+    let parsedDegreeRoles: Record<string, Record<string, DegreeRole>> = {};
+    if (storedDegreeRoles) {
+      try {
+        const parsed = JSON.parse(storedDegreeRoles);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          parsedDegreeRoles = Object.fromEntries(
+            Object.entries(parsed as Record<string, unknown>).filter(
+              ([, termRoles]) => {
+                if (
+                  !termRoles ||
+                  typeof termRoles !== 'object' ||
+                  Array.isArray(termRoles)
+                ) {
+                  return false;
+                }
+                return Object.values(
+                  termRoles as Record<string, unknown>,
+                ).every(
+                  (role) => role === 'degree' || role === 'nonDegree',
+                );
+              },
+            ),
+          ) as Record<string, Record<string, DegreeRole>>;
+        }
+      } catch {
+        window.localStorage.removeItem(DEGREE_ROLES_STORAGE_KEY);
+      }
+    }
+
     const nextActiveTerm =
       storedActiveTerm === DEFAULT_TERM_ID ||
       parsedDatasets.some((dataset) => dataset.id === storedActiveTerm)
@@ -441,6 +548,7 @@ export default function CourseExplorer({
       setSelectedByTerm(parsedSelections);
       setEarnedCredits(parsedEarned);
       setEnglishExemption(storedEnglishExemption === 'true');
+      setDegreeRolesByTerm(parsedDegreeRoles);
       setStorageReady(true);
     });
   }, []);
@@ -471,6 +579,11 @@ export default function CourseExplorer({
     if (!storageReady) return;
     persistToStorage(SELECTED_BY_TERM_STORAGE_KEY, selectedByTerm);
   }, [persistToStorage, selectedByTerm, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    persistToStorage(DEGREE_ROLES_STORAGE_KEY, degreeRolesByTerm);
+  }, [degreeRolesByTerm, persistToStorage, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -655,13 +768,14 @@ export default function CourseExplorer({
   function exportBackup() {
     const payload = {
       app: 'hias-csadeepseek',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       activeTermId,
       selectedByTerm,
       earnedCredits,
       customDatasets,
       englishExemption,
+      degreeRoles: degreeRolesByTerm,
     };
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(payload, null, 2)], {
@@ -713,9 +827,12 @@ export default function CourseExplorer({
       setSelectedByTerm(backup.selectedByTerm);
       setEarnedCredits(backup.earnedCredits);
       setEnglishExemption(backup.englishExemption);
+      setDegreeRolesByTerm(backup.degreeRoles);
       clearFilters();
       setDetailCourse(null);
-      setDataMessage('备份已恢复：学期数据、选课记录、已修学分与英语免修状态均已更新。');
+      setDataMessage(
+        '备份已恢复：学期数据、选课记录、已修学分、学位属性与英语免修状态均已更新。',
+      );
     } catch (error) {
       setDataError(
         error instanceof Error ? error.message : '备份恢复失败，请检查文件格式。',
@@ -829,7 +946,8 @@ export default function CourseExplorer({
     [initialCourses],
   );
   const subjects = useMemo(
-    () => [...new Set(initialCourses.map((course) => course.subject))].sort(),
+    () =>
+      [...new Set(initialCourses.flatMap((course) => courseSubjectNames(course)))].sort(),
     [initialCourses],
   );
   const selectedCourses = useMemo(
@@ -855,14 +973,45 @@ export default function CourseExplorer({
   // 创新创业模块课的归属取决于培养方向：专硕单列为“创新创业课”1 学分；
   // 学硕/博士未单列时，它们仍属公共选修课学分。
   const planSeparatesInnovation = activePlan.innovationCredits !== null;
-  const bucketOfCourse = useCallback(
-    (course: Course): RequirementBucketId => {
-      const bucket = categorizeRequirement(course.category, course.name);
-      return bucket === 'innovation' && !planSeparatesInnovation
-        ? 'publicElective'
-        : bucket;
+  // 已选课程的学位属性（仅保存用户显式设置；未设置为 null）
+  const degreeRolesOfTerm = useMemo(
+    () => degreeRolesByTerm[activeTermId] ?? {},
+    [activeTermId, degreeRolesByTerm],
+  );
+  const degreeRoleOf = useCallback(
+    (course: Course): DegreeRole | null => {
+      const kind = courseDegreeRoleKind(course);
+      if (kind === 'forcedNonDegree') return 'nonDegree';
+      if (kind === 'none') return null;
+      return degreeRolesOfTerm[course.id] ?? null;
     },
-    [planSeparatesInnovation],
+    [degreeRolesOfTerm],
+  );
+  const setDegreeRoleForActive = useCallback(
+    (courseId: string, role: DegreeRole | null) => {
+      setDegreeRolesByTerm((current) => {
+        const currentRoles = current[activeTermId];
+        const termRoles = currentRoles ? { ...currentRoles } : {};
+        if (role === null) {
+          delete termRoles[courseId];
+        } else {
+          termRoles[courseId] = role;
+        }
+        return { ...current, [activeTermId]: termRoles };
+      });
+    },
+    [activeTermId],
+  );
+  // 已选课程的桶：核心课/专业课按 degreeRole 归入学位/非学位桶；未设置返回 null（提示确认）。
+  const bucketOfSelectedCourse = useCallback(
+    (course: Course): RequirementBucketId | null =>
+      bucketForRole(
+        course.category,
+        course.name,
+        degreeRoleOf(course),
+        planSeparatesInnovation,
+      ),
+    [degreeRoleOf, planSeparatesInnovation],
   );
   const bucketOfEarnedCategory = useCallback(
     (category: string): RequirementBucketId => {
@@ -873,31 +1022,51 @@ export default function CourseExplorer({
     },
     [planSeparatesInnovation],
   );
-  const planCoreCourses = useMemo(
+  // 方案课程名单按去班号后的基础名匹配课程（与推荐引擎口径一致，兼容“XX-01班”）
+  const planCoreBaseNames = useMemo(
+    () => new Set(activePlan.coreCourses.map((name) => courseBaseName(name))),
+    [activePlan],
+  );
+  const planProBaseNames = useMemo(
     () =>
-      initialCourses.filter((course) =>
-        activePlan.coreCourses.includes(course.name),
-      ),
-    [activePlan, initialCourses],
+      new Set(activePlan.professionalCourses.map((name) => courseBaseName(name))),
+    [activePlan],
+  );
+  const planCoreFromBaseNames = useMemo(
+    () =>
+      new Set((activePlan.coreFrom ?? []).map((name) => courseBaseName(name))),
+    [activePlan],
+  );
+  const isPlanCoreName = useCallback(
+    (name: string) => planCoreBaseNames.has(courseBaseName(name)),
+    [planCoreBaseNames],
+  );
+  const isPlanProName = useCallback(
+    (name: string) => planProBaseNames.has(courseBaseName(name)),
+    [planProBaseNames],
+  );
+  const isPlanCoreFromName = useCallback(
+    (name: string) => planCoreFromBaseNames.has(courseBaseName(name)),
+    [planCoreFromBaseNames],
+  );
+  const planCoreCourses = useMemo(
+    () => initialCourses.filter((course) => isPlanCoreName(course.name)),
+    [initialCourses, isPlanCoreName],
   );
   const planProfessionalCourses = useMemo(
-    () =>
-      initialCourses.filter((course) =>
-        activePlan.professionalCourses.includes(course.name),
-      ),
-    [activePlan, initialCourses],
+    () => initialCourses.filter((course) => isPlanProName(course.name)),
+    [initialCourses, isPlanProName],
   );
   const selectedPlanCoreCount = selectedCourses.filter((course) =>
-    activePlan.coreCourses.includes(course.name),
+    isPlanCoreName(course.name),
   ).length;
   const selectedPlanProfessionalCount = selectedCourses.filter((course) =>
-    activePlan.professionalCourses.includes(course.name),
+    isPlanProName(course.name),
   ).length;
   const selectedPlanCredits = selectedCourses
     .filter(
       (course) =>
-        activePlan.coreCourses.includes(course.name) ||
-        activePlan.professionalCourses.includes(course.name),
+        isPlanCoreName(course.name) || isPlanProName(course.name),
     )
     .reduce((sum, course) => sum + course.credits, 0);
   const earnedTotal = Object.values(earnedCredits).reduce(
@@ -920,12 +1089,30 @@ export default function CourseExplorer({
   }, [bucketOfEarnedCategory, earnedCredits]);
   const requirementBuckets = useMemo<RequirementBucket[]>(() => {
     const selectedByBucket = new Map<RequirementBucketId, number>();
+    // 已选且“学位属性未确认”的核心课/专业课（不计入任何学位桶，需界面提示）。
+    const pendingRoleCourses: Course[] = [];
+    // 学位课相关门数（只计 degreeRole==='degree' 的课程）
+    let coreDegree = 0;
+    let proDegree = 0;
+    let fromDegree = 0;
     selectedCourses.forEach((course) => {
-      const bucket = bucketOfCourse(course);
+      const bucket = bucketOfSelectedCourse(course);
+      if (bucket === null) {
+        if (isDegreeRoleSettable(course.category)) pendingRoleCourses.push(course);
+        return;
+      }
       selectedByBucket.set(
         bucket,
         (selectedByBucket.get(bucket) ?? 0) + course.credits,
       );
+      if (bucket === 'degree') {
+        if (isPlanCoreName(course.name)) {
+          coreDegree += 1;
+          if (isPlanCoreFromName(course.name)) fromDegree += 1;
+        } else if (isPlanProName(course.name)) {
+          proDegree += 1;
+        }
+      }
     });
     const selected = (id: RequirementBucketId) =>
       selectedByBucket.get(id) ?? 0;
@@ -947,8 +1134,12 @@ export default function CourseExplorer({
         selected: selected('degree'),
         earned: earned('degree'),
         required: activePlan.degreeCourseCredits,
-        hint: `其中至少 ${activePlan.coreMinimum} 门核心课、${activePlan.professionalMinimum} 门专业课`,
+        hint:
+          activePlan.coreMinimum === null && activePlan.professionalMinimum === null
+            ? '学位课须为培养方案核心课/专业课并勾选“作为学位课”'
+            : `其中至少 ${activePlan.coreMinimum} 门核心课、${activePlan.professionalMinimum} 门专业课`,
         nullText: '不限',
+        role: { coreDegree, proDegree, fromDegree, pending: pendingRoleCourses.length },
       },
       {
         id: 'professionalNonDegree',
@@ -956,7 +1147,7 @@ export default function CourseExplorer({
         selected: selected('professionalNonDegree'),
         earned: earned('professionalNonDegree'),
         required: activePlan.professionalNonDegreeCredits,
-        hint: '含研讨课与实验课',
+        hint: '含研讨课、实验课及被标记为“非学位课”的核心课/专业课',
         nullText: '不限',
       },
       {
@@ -996,16 +1187,24 @@ export default function CourseExplorer({
     return buckets;
   }, [
     activePlan,
-    bucketOfCourse,
+    bucketOfSelectedCourse,
     earnedByBucket,
     englishExemptCredits,
+    isPlanCoreFromName,
+    isPlanCoreName,
+    isPlanProName,
     planSeparatesInnovation,
     selectedCourses,
   ]);
   const suggestions = useMemo<{
     rows: PlanSuggestion[];
     unsatisfied: PlanGap[];
+    degreeRolePending: number;
   }>(() => {
+    const degreeRolesMap: Record<string, DegreeRole | null> = {};
+    selectedCourses.forEach((course) => {
+      degreeRolesMap[course.id] = degreeRoleOf(course);
+    });
     const result = computeCourseRecommendations({
       courses: initialCourses,
       selectedCourses,
@@ -1014,6 +1213,7 @@ export default function CourseExplorer({
         RequirementBucketId,
         number
       >,
+      degreeRoles: degreeRolesMap,
       plan: {
         coreCourses: activePlan.coreCourses,
         professionalCourses: activePlan.professionalCourses,
@@ -1026,6 +1226,7 @@ export default function CourseExplorer({
         publicElectiveCredits: activePlan.publicElectiveCredits,
         innovationCredits: activePlan.innovationCredits,
         homeCollege: activePlan.homeCollege ?? '',
+        coreFrom: activePlan.coreFrom,
       },
       englishExemption,
     });
@@ -1036,14 +1237,17 @@ export default function CourseExplorer({
         course: r.course,
         gapLabel: labelOf(r.bucket),
         reason: r.reason,
+        bucket: r.bucket,
       })),
       unsatisfied: result.unsatisfied.map((u) => ({
         label: u.label,
         remaining: u.remaining,
       })),
+      degreeRolePending: result.degreeRolePendingCount,
     };
   }, [
     activePlan,
+    degreeRoleOf,
     earnedByBucket,
     englishExemption,
     initialCourses,
@@ -1051,6 +1255,9 @@ export default function CourseExplorer({
     selectedCourses,
     selectedIds,
   ]);
+  const degreeBucket = requirementBuckets.find(
+    (bucket) => bucket.id === 'degree',
+  );
   const graduationPercent = Math.min(
     100,
     Math.round(
@@ -1168,6 +1375,7 @@ export default function CourseExplorer({
           course.teacher,
           course.college,
           course.subject,
+          ...courseSubjectNames(course),
           ...course.schedules.map((schedule) => schedule.room),
         ]
           .join(' ')
@@ -1175,8 +1383,7 @@ export default function CourseExplorer({
           .includes(normalized);
       const matchesCollege =
         college === '全部院系' || course.college === college;
-      const matchesSubject =
-        subject === '全部学科/专业' || course.subject === subject;
+      const matchesSubject = courseMatchesSubject(course, subject);
       const matchesCategory =
         category === '全部类别' || course.category === category;
       const matchesDay =
@@ -1218,6 +1425,25 @@ export default function CourseExplorer({
         ? current.filter((item) => item !== id)
         : [...current, id],
     );
+    // 取消选择时同步清空该课程的学位属性标记，避免再次加入后残留旧属性。
+    if (selectedIds.includes(id)) {
+      setDegreeRoleForActive(id, null);
+    }
+  }
+
+  // 从智能建议加入：若课程可设学位属性，则按建议桶自动标记。
+  function joinSuggestedCourse(course: Course, bucket: RequirementBucketId) {
+    const willBeSelected = !selectedIds.includes(course.id);
+    toggleCourse(course.id);
+    if (willBeSelected && isDegreeRoleSettable(course.category)) {
+      const role =
+        bucket === 'degree'
+          ? 'degree'
+          : bucket === 'professionalNonDegree'
+            ? 'nonDegree'
+            : null;
+      if (role) setDegreeRoleForActive(course.id, role);
+    }
   }
 
   function replaceCourse(sourceId: string, replacementId: string) {
@@ -1422,7 +1648,7 @@ export default function CourseExplorer({
                     )}
                   </p>
                   <p className="mt-0.5 text-[0.66rem] leading-4 text-white/55">
-                    符合免修条件（考研英语≥70 等）即可开启：英语班课不排课，公共必修计 3 分
+                    符合免修条件（考研英语≥70 等）即可开启：英语班课不排课，公共必修计 3 分；是否取得免修资格须以学校最终审核结果为准
                   </p>
                 </div>
                 <button
@@ -1843,6 +2069,10 @@ export default function CourseExplorer({
                 {filteredCourses.length}
               </p>
             </div>
+            <p className="mb-4 -mt-1 text-xs leading-5 text-slate-400">
+              课程时间、教室、周次与学分以 SEP 选课系统最新信息为准；本页面数据基于
+              2026—2027 学年秋季课表与学院课程设置整理，个别课程已在详情中标注来源与待核验状态。
+            </p>
 
             {filteredCourses.length ? (
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -1864,7 +2094,7 @@ export default function CourseExplorer({
                             >
                               {course.category}
                             </Badge>
-                            {activePlan.coreCourses.includes(course.name) && (
+                            {isPlanCoreName(course.name) && (
                               <Badge
                                 className="bg-violet-50 text-violet-700"
                                 variant="secondary"
@@ -1872,9 +2102,7 @@ export default function CourseExplorer({
                                 方案核心课
                               </Badge>
                             )}
-                            {activePlan.professionalCourses.includes(
-                              course.name,
-                            ) && (
+                            {isPlanProName(course.name) && (
                               <Badge
                                 className="bg-amber-50 text-amber-700"
                                 variant="secondary"
@@ -1924,11 +2152,32 @@ export default function CourseExplorer({
                         <div className="info-pair">
                           <GraduationCap />
                           <span>
-                            <strong>{course.subject}</strong>
+                            <strong>{courseSubjectDisplay(course)}</strong>
                             <small>{course.college}</small>
                           </span>
                         </div>
                       </div>
+                      {selected &&
+                        courseDegreeRoleKind(course) === 'settable' && (
+                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
+                            <span className="text-[0.72rem] font-medium text-slate-500">
+                              学位属性
+                            </span>
+                            <DegreeRoleControl
+                              compact
+                              onChange={(role) =>
+                                setDegreeRoleForActive(course.id, role)
+                              }
+                              value={degreeRoleOf(course)}
+                            />
+                          </div>
+                        )}
+                      {selected &&
+                        courseDegreeRoleKind(course) === 'forcedNonDegree' && (
+                          <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-[0.72rem] text-slate-500">
+                            研讨课/实验课/实践课/讲座：仅可作为非学位课修读
+                          </div>
+                        )}
                       <div className="course-meta-line">
                         <span>
                           <ClipboardCheck /> {course.examMode || '考试方式待定'}
@@ -2051,6 +2300,20 @@ export default function CourseExplorer({
               </div>
             </div>
 
+            {/\(秋\)|\(春\)/.test(activeDataset.label) && selectedCredits < 10 && (
+              <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                <Zap className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                <span>
+                  {compactTermLabel(activeDataset.label)}要求选课学分不低于
+                  10 学分（不含《人文系列讲座（HIAS讲堂）》《科学前沿讲座》）。
+                  当前本学期已选 {formatCredits(selectedCredits)} 学分
+                  {selectedCourses.length === 0
+                    ? '，请先在「课程列表」加入课程。'
+                    : `，还差 ${formatCredits(Math.max(0, 10 - selectedCredits))} 学分。`}
+                </span>
+              </div>
+            )}
+
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="font-bold">学分达成度</h3>
@@ -2077,14 +2340,26 @@ export default function CourseExplorer({
                   const required = bucket.required;
                   const effective =
                     bucket.selected + bucket.earned + (bucket.exempt ?? 0);
-                  const met = required !== null && effective >= required;
-                  const ratio =
-                    required !== null && required > 0
-                      ? effective / required
-                      : 0;
+                  const creditsMet = required !== null && effective >= required;
+                  // 专业学位课“完成”还需学位课门数与来源集合满足（如 AI 至少 1 门来自指定核心课）
+                  const role = bucket.role;
+                  const roleCountsOk =
+                    !role ||
+                    ((activePlan.coreMinimum === null ||
+                      role.coreDegree >= (activePlan.coreMinimum ?? 0)) &&
+                      (activePlan.professionalMinimum === null ||
+                        role.proDegree >= (activePlan.professionalMinimum ?? 0)) &&
+                      (!activePlan.coreFrom?.length ||
+                        role.fromDegree >= 1));
+                  const met = creditsMet && roleCountsOk;
                   const remaining =
                     required !== null
                       ? Math.max(0, required - effective)
+                      : 0;
+                  const rolePending = role && role.pending > 0 ? role.pending : 0;
+                  const ratio =
+                    required !== null && required > 0
+                      ? effective / required
                       : 0;
                   const compositionParts: string[] = [];
                   if ((bucket.exempt ?? 0) > 0) {
@@ -2103,6 +2378,18 @@ export default function CourseExplorer({
                   const composition = compositionParts.length
                     ? `${compositionParts.join(' + ')} · `
                     : '';
+                  let statusText: string;
+                  if (met) {
+                    statusText = '已达标';
+                  } else if (required !== null && !creditsMet) {
+                    statusText = `还差 ${formatCredits(remaining)} 学分`;
+                  } else if (role && rolePending > 0) {
+                    statusText = `还有 ${rolePending} 门已选核心课/专业课未确认学位属性`;
+                  } else if (role && !roleCountsOk) {
+                    statusText = '学分已足，但学位课门数（或指定来源课程）未满足，请为对应课程设置“学位课”属性';
+                  } else {
+                    statusText = bucket.nullText;
+                  }
                   return (
                     <div key={bucket.id}>
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -2131,7 +2418,7 @@ export default function CourseExplorer({
                             }`}
                           >
                             {composition}
-                            {met ? '已达标' : `还差 ${formatCredits(remaining)} 学分`}
+                            {statusText}
                             {bucket.hint ? ` · ${bucket.hint}` : ''}
                           </p>
                         </>
@@ -2259,55 +2546,58 @@ export default function CourseExplorer({
               <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h3 className="font-bold">智能选课建议</h3>
-                <span className="text-xs text-slate-500">
-                  已排除与当前已选冲突的班次，加入后列表自动更新
-                </span>
-              </div>
+                  <span className="text-xs text-slate-500">
+                    已排除与当前已选冲突的班次，加入后列表自动更新
+                  </span>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  推荐口径：专业学位课默认只推荐本专业培养方案中的核心课和专业课；专业非学位课默认只推荐本学院开设的课程。相关学科课程如需作为学位课、或需跨学院修读专业非学位课，请根据导师及学院意见手动选择。学位课数量按实际设置“学位课”的课程门数考核，已修学分不计入门数。
+                </p>
               {suggestions.rows.length > 0 && (
                 <>
                   <p className="mt-1 text-xs leading-5 text-slate-500">
-                    依据「{activePlan.label}」学分缺口（含历史已修与本学期已选）自动推荐，优先以高学分课程补齐缺口。
+                    依据「{activePlan.label}」学分缺口（含历史已修与本学期已选）自动推荐。加入学位课建议时默认标记为“学位课”，可随时在课程卡上改为“非学位课”。
                   </p>
                   <div className="mt-3 grid gap-2">
-                    {suggestions.rows.map(({ course, gapLabel, reason }) => (
-                      <div
-                        className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2"
-                        key={course.id}
-                      >
-                        <div className="min-w-0">
-                          <button
-                            className="text-left font-medium text-slate-900 hover:text-blue-700"
-                            onClick={() => setDetailCourse(course)}
-                            type="button"
-                          >
-                            {course.name}
-                          </button>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500">
-                            <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-blue-700">
-                              {gapLabel}
-                            </span>
-                            <span>{formatCredits(course.credits)} 学分</span>
-                            <span>{course.schedules[0]?.periodText || '时间待定'}</span>
-                            <span>{course.teacher}</span>
-                          </div>
-                          <p className="mt-0.5 text-[0.71rem] leading-4 text-slate-400">
-                            {reason}
-                          </p>
-                        </div>
-                        <Button
-                          className="h-8 shrink-0 rounded-lg text-slate-600"
-                          onClick={() => toggleCourse(course.id)}
-                          size="sm"
-                          variant="outline"
+                    {suggestions.rows.map(
+                      ({ course, gapLabel, reason, bucket }) => (
+                        <div
+                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2"
+                          key={course.id}
                         >
-                          <Star /> 加入
-                        </Button>
-                      </div>
-                    ))}
+                          <div className="min-w-0">
+                            <button
+                              className="text-left font-medium text-slate-900 hover:text-blue-700"
+                              onClick={() => setDetailCourse(course)}
+                              type="button"
+                            >
+                              {course.name}
+                            </button>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500">
+                              <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-blue-700">
+                                {gapLabel}
+                              </span>
+                              <span>{formatCredits(course.credits)} 学分</span>
+                              <span>{course.schedules[0]?.periodText || '时间待定'}</span>
+                              <span>{course.teacher}</span>
+                            </div>
+                            <p className="mt-0.5 text-[0.71rem] leading-4 text-slate-400">
+                              {reason}
+                            </p>
+                          </div>
+                          <Button
+                            aria-label={`加入${course.name}`}
+                            className="h-8 shrink-0 rounded-lg text-slate-600"
+                            onClick={() => joinSuggestedCourse(course, bucket)}
+                            size="sm"
+                            variant="outline"
+                          >
+                            <Star /> 加入
+                          </Button>
+                        </div>
+                      ),
+                    )}
                   </div>
-                  <p className="mt-3 text-xs leading-5 text-slate-500">
-                    提示：核心课 / 专业课的「至少选 2 门作为学位课」按课程数量考核，已修学分不计入门数，请结合上方覆盖统计核对。
-                  </p>
                 </>
               )}
               {suggestions.unsatisfied.length > 0 && (
@@ -2329,11 +2619,17 @@ export default function CourseExplorer({
                 </div>
               )}
               {!suggestions.rows.length &&
-                !suggestions.unsatisfied.length && (
+                !suggestions.unsatisfied.length &&
+                suggestions.degreeRolePending === 0 && (
                   <div className="mt-2 text-sm leading-6 text-emerald-700">
-                    当前培养方向的学分要求已全部达成（含历史已修与本学期已选）。核心课 / 专业课门数要求请参考上方覆盖统计。
+                    当前培养方向的学分与学位课门数要求已全部达成（含历史已修与本学期已选）。
                   </div>
                 )}
+              {suggestions.degreeRolePending > 0 && (
+                <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                  有 {suggestions.degreeRolePending} 门已选核心课/专业课尚未设置学位属性：课程覆盖可能已满足，但学位课门数/学分尚未确认。请在课程卡的「学位属性」中标记后再核对达成度。
+                </div>
+              )}
               </div>
             )}
 
@@ -2341,35 +2637,41 @@ export default function CourseExplorer({
               <div className="rule-card">
                 <Target />
                 <div>
-                  <span>本学期核心课覆盖</span>
+                  <span>本学期方案核心课（须设为学位课）</span>
                   <strong>
-                    已选 {selectedPlanCoreCount} / 可选 {planCoreCourses.length}{' '}
-                    门
+                    {activePlan.coreMinimum === null
+                      ? '博士门数要求以个人培养方案为准'
+                      : `已设学位课 ${degreeBucket?.role?.coreDegree ?? 0} / 至少 ${activePlan.coreMinimum} 门`}
                   </strong>
                   <p>
-                    培养方案要求：至少 {activePlan.coreMinimum} 门作为学位课
+                    课程库覆盖：已选 {selectedPlanCoreCount} / 可选{' '}
+                    {planCoreCourses.length} 门
                   </p>
                 </div>
                 <b>
-                  {selectedPlanCoreCount}/{planCoreCourses.length}
+                  {activePlan.coreMinimum === null
+                    ? '—'
+                    : `${degreeBucket?.role?.coreDegree ?? 0}/${activePlan.coreMinimum}`}
                 </b>
               </div>
               <div className="rule-card">
                 <Target />
                 <div>
-                  <span>本学期专业课覆盖</span>
+                  <span>本学期方案专业课（须设为学位课）</span>
                   <strong>
-                    已选 {selectedPlanProfessionalCount} / 可选{' '}
-                    {planProfessionalCourses.length} 门
+                    {activePlan.professionalMinimum === null
+                      ? '博士门数要求以个人培养方案为准'
+                      : `已设学位课 ${degreeBucket?.role?.proDegree ?? 0} / 至少 ${activePlan.professionalMinimum} 门`}
                   </strong>
                   <p>
-                    培养方案要求：至少 {activePlan.professionalMinimum}{' '}
-                    门作为学位课
+                    课程库覆盖：已选 {selectedPlanProfessionalCount} / 可选{' '}
+                    {planProfessionalCourses.length} 门
                   </p>
                 </div>
                 <b>
-                  {selectedPlanProfessionalCount}/
-                  {planProfessionalCourses.length}
+                  {activePlan.professionalMinimum === null
+                    ? '—'
+                    : `${degreeBucket?.role?.proDegree ?? 0}/${activePlan.professionalMinimum}`}
                 </b>
               </div>
             </div>
@@ -2377,7 +2679,7 @@ export default function CourseExplorer({
             <div className="coverage-note mt-4">
               <Info />
               <span>
-                这里统计的是本学期已选课程对培养方案课程库的覆盖情况，不代表课程已经被认定为学位课，也不等同于毕业完成度。
+                这里统计的是本学期已选课程对培养方案课程库的覆盖情况；只有被标记为“学位课”的核心课/专业课才计入上方学位课门数与学分，未确认属性时不会自动计入。学位课数量以你手动确认的“学位属性”为准，不代表课程已被认定为学位课。
               </span>
             </div>
 
@@ -2430,6 +2732,30 @@ export default function CourseExplorer({
                             <Star className={selected ? 'fill-current' : ''} />
                             {selected ? '已选' : '选择'}
                           </Button>
+                          {selected && isDegreeRoleSettable(course.category) && (
+                            <div className="flex flex-wrap items-center justify-end gap-2 px-1 pb-1.5">
+                              <span
+                                className={`text-[0.66rem] leading-4 ${
+                                  degreeRoleOf(course) === null
+                                    ? 'font-medium text-amber-600'
+                                    : 'text-slate-400'
+                                }`}
+                              >
+                                {degreeRoleOf(course) === null
+                                  ? '待确认学位属性'
+                                  : degreeRoleOf(course) === 'degree'
+                                    ? '已设为学位课'
+                                    : '已设为非学位课'}
+                              </span>
+                              <DegreeRoleControl
+                                compact
+                                onChange={(role) =>
+                                  setDegreeRoleForActive(course.id, role)
+                                }
+                                value={degreeRoleOf(course)}
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -2447,7 +2773,7 @@ export default function CourseExplorer({
                         : activePlan.professionalCourses
                       ).length
                     }{' '}
-                    门，未出现的课程可能安排在春季。
+                    门，未出现的课程可能安排在春季。本方向课程加入课表后需在「学位属性」中确认作为学位课/非学位课，学位课门数与学分只统计已设为“学位课”的课程。
                   </p>
                 </div>
               ))}
@@ -2456,10 +2782,8 @@ export default function CourseExplorer({
             <div className="source-compare-note mt-5">
               <Info />
               <span>
-                培养要求与课程库依据
-                PPT；本学期课程的学分、教师、时间和教室仍以秋季课表为准。
-                {activePlan.program === '物理电子学' &&
-                  ' 两份文件中“主被动光谱探测技术”的学分分别为2与2.5，本页采用秋季课表的2.5学分并保留此提示。'}
+                培养要求与课程库依据 PPT 与 2026—2027 学年选课文件整理；个别课程的时间/周次/学分以
+                SEP 选课系统最新信息为准（本工具已在课程详情中标注数据来源与核验状态）。
               </span>
             </div>
           </section>
@@ -2818,7 +3142,11 @@ export default function CourseExplorer({
                   </Badge>
                   <Badge variant="outline">{detailCourse.level}</Badge>
                   <Badge className="source-badge" variant="secondary">
-                    <FileSpreadsheet /> 秋季课表数据
+                    <FileSpreadsheet />{' '}
+                    {detailCourse.source ||
+                      (detailCourse.verificationStatus === 'system'
+                        ? 'SEP 选课系统数据'
+                        : '2026—2027 秋季课表数据')}
                   </Badge>
                 </div>
                 <SheetTitle className="text-2xl font-bold leading-tight">
@@ -2837,7 +3165,7 @@ export default function CourseExplorer({
                       `${formatCredits(detailCourse.credits)} / ${detailCourse.hours}`,
                     ],
                     ['任课教师', detailCourse.teacher],
-                    ['所属学科', detailCourse.subject],
+                    ['所属学科/专业', courseSubjectDisplay(detailCourse)],
                     ['开课院系', detailCourse.college],
                     ['考试方式', detailCourse.examMode],
                     ['授课方式', detailCourse.teachingMode],
@@ -2852,6 +3180,12 @@ export default function CourseExplorer({
                     </div>
                   ))}
                 </div>
+                {detailCourse.verificationStatus === 'pending' && (
+                  <div className="flex gap-2 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                    <Info className="mt-0.5 size-4 shrink-0" />
+                    该课程数据仍需人工核验（与来源材料存在差异），请以 SEP 选课系统最新信息为准。
+                  </div>
+                )}
                 <div>
                   <h3 className="mb-3 flex items-center gap-2 font-bold">
                     <Clock3 className="size-4 text-blue-600" /> 上课安排
@@ -2893,10 +3227,38 @@ export default function CourseExplorer({
                     ? '从已选中移除'
                     : '加入我的课表'}
                 </Button>
+                {selectedIds.includes(detailCourse.id) &&
+                  courseDegreeRoleKind(detailCourse) !== 'none' && (
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-700">
+                          学位属性
+                        </p>
+                        <p className="mt-0.5 text-[0.68rem] leading-4 text-slate-500">
+                          {courseDegreeRoleKind(detailCourse) === 'forcedNonDegree'
+                            ? '研讨课/实验课/实践课/讲座等只能作为非学位课修读。'
+                            : '设为“学位课”计入专业学位课学分与门数；设为“非学位课”计入专业非学位课。'}
+                        </p>
+                      </div>
+                      {courseDegreeRoleKind(detailCourse) === 'settable' ? (
+                        <DegreeRoleControl
+                          onChange={(role) =>
+                            setDegreeRoleForActive(detailCourse.id, role)
+                          }
+                          value={degreeRoleOf(detailCourse)}
+                        />
+                      ) : (
+                        <Badge variant="outline">仅非学位课</Badge>
+                      )}
+                    </div>
+                  )}
                 <div className="flex gap-2 rounded-xl bg-emerald-50 p-3 text-xs leading-5 text-emerald-800">
                   <Info className="mt-0.5 size-4 shrink-0" />
                   开课校区：国科大杭州高等研究院。
                 </div>
+                <p className="text-[0.68rem] leading-4 text-slate-400">
+                  课程安排以 SEP 选课系统最新信息为准。
+                </p>
               </div>
             </>
           )}

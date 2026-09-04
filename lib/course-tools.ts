@@ -2,6 +2,13 @@
 // unit tests. No React, no DOM, no storage — everything here is testable
 // with `node --test`.
 
+export type SubjectRef = {
+  code?: string;
+  name: string;
+};
+
+export type VerificationStatus = 'verified' | 'pending' | 'system';
+
 export type Schedule = {
   day: string;
   dayIndex: number;
@@ -22,6 +29,8 @@ export type Course = {
   category: string;
   level: string;
   subject: string;
+  /** 课程可同时归属多个学科/专业（code 为专业代码，如 085410）。为空时按 subject 兼容处理。 */
+  subjects?: SubjectRef[];
   hours: string;
   credits: number;
   capacity: number;
@@ -30,7 +39,44 @@ export type Course = {
   examMode: string;
   teacher: string;
   schedules: Schedule[];
+  /** 课程数据可信度：来源、核验时间与状态（SEP=system 优先于静态 PPT=verified/pending）。 */
+  source?: string;
+  verifiedAt?: string;
+  verificationStatus?: VerificationStatus;
 };
+
+export function courseSubjects(course: Pick<Course, 'subject' | 'subjects'>) {
+  if (course.subjects && course.subjects.length > 0) {
+    return course.subjects.map((item) => ({
+      code: typeof item.code === 'string' ? item.code : undefined,
+      name: item.name,
+    }));
+  }
+  return course.subject ? [{ code: undefined, name: course.subject }] : [];
+}
+
+export function courseSubjectNames(course: Pick<Course, 'subject' | 'subjects'>) {
+  return courseSubjects(course).map((item) => item.name);
+}
+
+export function courseMatchesSubject(
+  course: Pick<Course, 'subject' | 'subjects'>,
+  selected: string,
+) {
+  if (selected === '全部学科/专业') return true;
+  return courseSubjects(course).some(
+    (item) => item.name === selected || item.code === selected,
+  );
+}
+
+export function courseSubjectDisplay(
+  course: Pick<Course, 'subject' | 'subjects'>,
+) {
+  const refs = courseSubjects(course);
+  return refs
+    .map((item) => (item.code ? `${item.code} ${item.name}` : item.name))
+    .join('、');
+}
 
 export type CourseDataset = {
   id: string;
@@ -54,8 +100,16 @@ export type RequirementBucketId =
   | 'innovation'
   | 'other';
 
+export type DegreeRole = 'degree' | 'nonDegree';
+
 export const DEGREE_CATEGORIES = ['专业核心课', '学科核心课', '专业课'];
-export const NON_DEGREE_CATEGORIES = ['研讨课', '实验课'];
+// 只能作为非学位课修读的课程类别（研讨/实验/实践/科学前沿讲座等）
+export const NON_DEGREE_CATEGORIES = [
+  '研讨课',
+  '实验课',
+  '实践课',
+  '科学前沿讲座',
+];
 export const COURSE_CATEGORY_ORDER = [
   '公共必修课',
   '公共选修课',
@@ -66,6 +120,57 @@ export const COURSE_CATEGORY_ORDER = [
   '实验课',
   '创新创业课',
 ];
+
+/** 某课程类别是否允许用户选择“作为学位课/非学位课”（仅学科/专业核心课与专业课）。 */
+export function isDegreeRoleSettable(category: string) {
+  return DEGREE_CATEGORIES.includes(category);
+}
+
+/** 某课程类别是否强制只能作为非学位课修读。 */
+export function isForcedNonDegreeCategory(category: string) {
+  return NON_DEGREE_CATEGORIES.includes(category);
+}
+
+/**
+ * 课程在“学位属性”上的角色类别：
+ * - 'settable'：核心课/专业课，用户可设为学位课或非学位课；
+ * - 'forcedNonDegree'：研讨/实验/实践/讲座等，只能作为非学位课；
+ * - 'none'：公共必修/公共选修/创新创业等，无学位属性概念。
+ */
+export function courseDegreeRoleKind(course: {
+  category: string;
+  name: string;
+}): 'settable' | 'forcedNonDegree' | 'none' {
+  if (isDegreeRoleSettable(course.category)) return 'settable';
+  if (isForcedNonDegreeCategory(course.category)) return 'forcedNonDegree';
+  return 'none';
+}
+
+/**
+ * 结合用户设置的 degreeRole 得到一门已选课程的实际需求桶。
+ * - 核心课/专业课：degree → 专业学位课；nonDegree → 专业非学位课；未设置 → 返回 null（不计入任何学位桶，需提示确认）。
+ * - 研讨课/实验课/实践课/科学前沿讲座：强制 nonDegree → 专业非学位课。
+ * - 其他（公共必修/公共选修/创新创业）：按类别归属，与学位属性无关。
+ * planSeparatesInnovation=false 时创新创业模块课并入公共选修。
+ */
+export function bucketForRole(
+  category: string,
+  name: string,
+  role: DegreeRole | null | undefined,
+  planSeparatesInnovation: boolean,
+): RequirementBucketId | null {
+  const base = categorizeRequirement(category, name);
+  if (base === 'degree') {
+    if (role === 'degree') return 'degree';
+    if (role === 'nonDegree') return 'professionalNonDegree';
+    return null;
+  }
+  if (base === 'professionalNonDegree') return 'professionalNonDegree';
+  if (base === 'innovation' && !planSeparatesInnovation) {
+    return 'publicElective';
+  }
+  return base;
+}
 
 // 2026-2027 学年创新创业模块课程（《课程学习及选课须知》），在课表中其
 // 课程属性为公共选修课，但对专业学位硕士是单独的 1 学分要求。
@@ -262,14 +367,16 @@ export function isMasterEnglishCourseName(name: string) {
 export type PlanForRecommendation = {
   coreCourses: string[];
   professionalCourses: string[];
-  coreMinimum: number;
-  professionalMinimum: number;
+  coreMinimum: number | null;
+  professionalMinimum: number | null;
   degreeCourseCredits: number;
   professionalNonDegreeCredits: number | null;
   publicRequiredCredits: number;
   publicElectiveCredits: number;
   innovationCredits: number | null;
   homeCollege: string;
+  /** 方向性“来源集合”：如人工智能要求核心课中至少 1 门来自这些课程。 */
+  coreFrom?: string[];
 };
 
 export type RecommendationInput = {
@@ -279,6 +386,8 @@ export type RecommendationInput = {
   earnedByBucket: Partial<Record<RequirementBucketId, number>>;
   plan: PlanForRecommendation;
   englishExemption: boolean;
+  /** 已选课程中，用户对“可设学位属性”课程（学科/专业核心课、专业课）的标记。 */
+  degreeRoles?: Partial<Record<string, DegreeRole | null>>;
 };
 
 export type CourseRecommendation = {
@@ -294,6 +403,8 @@ export type RecommendationResult = {
     label: string;
     remaining: number;
   }[];
+  /** 已选但尚未设置学位属性的核心课/专业课门数（界面提示用）。 */
+  degreeRolePendingCount: number;
 };
 
 const RECOMMENDATION_LABELS: Record<RequirementBucketId, string> = {
@@ -343,6 +454,7 @@ export function computeCourseRecommendations(
 ): RecommendationResult {
   const { courses, selectedCourses, selectedIds, earnedByBucket, plan } = input;
   const englishExemption = input.englishExemption;
+  const degreeRoles = input.degreeRoles ?? {};
   const selectedIdSet = new Set<string>(selectedIds);
   const blocked = [...selectedCourses];
   const chosen: CourseRecommendation[] = [];
@@ -352,7 +464,17 @@ export function computeCourseRecommendations(
 
   const coreSet = new Set(plan.coreCourses);
   const proSet = new Set(plan.professionalCourses);
-  const librarySet = new Set([...plan.coreCourses, ...plan.professionalCourses]);
+  // 培养方案名单与课程名都可能带班号（如“核心一-01班”），统一按去班号后的基础名匹配
+  const coreBaseSet = new Set(plan.coreCourses.map((n) => courseBaseName(n)));
+  const proBaseSet = new Set(plan.professionalCourses.map((n) => courseBaseName(n)));
+  const librarySet = new Set<string>([
+    ...plan.coreCourses,
+    ...plan.professionalCourses,
+  ]);
+  const libraryBaseSet = new Set<string>([
+    ...coreBaseSet,
+    ...proBaseSet,
+  ]);
 
   const bucketOf = (course: Course): RequirementBucketId => {
     const b = categorizeRequirement(course.category, course.name);
@@ -360,8 +482,37 @@ export function computeCourseRecommendations(
       ? 'publicElective'
       : b;
   };
-  const isCore = (c: Course) => coreSet.has(c.name);
-  const isPro = (c: Course) => proSet.has(c.name);
+  // 统计用：已选课程结合 degreeRole 归桶。可设学位属性的核心课/专业课
+  // 只有在标记为学位课(nonDegree 之外的 'degree')才计入专业学位课；
+  // 标记为 nonDegree 则计入专业非学位课；未标记返回 null（由界面提示确认）。
+  const statBucketOf = (course: Course): RequirementBucketId | null => {
+    const role =
+      course.category && isDegreeRoleSettable(course.category)
+        ? degreeRoles?.[course.id] ?? null
+        : null;
+    return bucketForRole(
+      course.category,
+      course.name,
+      role,
+      plan.innovationCredits !== null,
+    );
+  };
+  // 方向性“核心课来源集合”（如人工智能：至少 1 门来自《高级人工智能》《自然语言处理》）
+  const coreFromSet = new Set(
+    (plan.coreFrom ?? []).map((name) => courseBaseName(name)),
+  );
+  // 已选学位课核心课中命中来源集合的数量
+  const selectedCoreFromHit = selectedCourses.filter(
+    (c) =>
+      isDegreeRoleSettable(c.category) &&
+      statBucketOf(c) === 'degree' &&
+      coreFromSet.has(courseBaseName(c.name)),
+  ).length;
+  let coreFromHit = selectedCoreFromHit;
+  const isCore = (c: Course) =>
+    coreBaseSet.has(courseBaseName(c.name)) || coreSet.has(c.name);
+  const isPro = (c: Course) =>
+    proBaseSet.has(courseBaseName(c.name)) || proSet.has(c.name);
   const isMasterEnglish = (c: Course) => isMasterEnglishCourseName(c.name);
 
   const valid = (c: Course) =>
@@ -375,10 +526,16 @@ export function computeCourseRecommendations(
   let selProCount = 0;
   let selCoreCredits = 0;
   let selProCredits = 0;
+  // 已选但尚未设置学位属性的核心课/专业课门数（用于界面提示“学位属性未确认”）。
+  let pendingDegreeRoleCount = 0;
   for (const c of selectedCourses) {
-    const b = bucketOf(c);
-    selByBucket.set(b, (selByBucket.get(b) ?? 0) + c.credits);
-    if (b === 'degree') {
+    const stat = statBucketOf(c);
+    if (stat === null) {
+      if (isDegreeRoleSettable(c.category)) pendingDegreeRoleCount += 1;
+      continue;
+    }
+    selByBucket.set(stat, (selByBucket.get(stat) ?? 0) + c.credits);
+    if (stat === 'degree') {
       if (isCore(c)) {
         selCoreCount += 1;
         selCoreCredits += c.credits;
@@ -410,8 +567,11 @@ export function computeCourseRecommendations(
       ? 0
       : plan.innovationCredits - earned('innovation') - sel('innovation');
 
-  const needCoreCount = Math.max(0, plan.coreMinimum - selCoreCount);
-  const needProCount = Math.max(0, plan.professionalMinimum - selProCount);
+  const needCoreCount = Math.max(0, (plan.coreMinimum ?? 0) - selCoreCount);
+  const needProCount = Math.max(
+    0,
+    (plan.professionalMinimum ?? 0) - selProCount,
+  );
   const degreeCreditsGap = Math.max(
     0,
     plan.degreeCourseCredits - earned('degree') - selCoreCredits - selProCredits,
@@ -426,7 +586,12 @@ export function computeCourseRecommendations(
     },
     {
       bucket: 'degree',
-      pool: courses.filter((c) => valid(c) && librarySet.has(c.name)),
+      pool: courses.filter(
+        (c) =>
+          valid(c) &&
+          (librarySet.has(c.name) ||
+            libraryBaseSet.has(courseBaseName(c.name))),
+      ),
     },
     {
       bucket: 'professionalNonDegree',
@@ -523,10 +688,29 @@ export function computeCourseRecommendations(
       });
       if (!groups.length) break;
       let best: Course | null = null;
-      for (const arr of groups) {
-        const cand = bestOf(arr);
-        if (cand && (!best || cand.id.localeCompare(best.id) < 0)) {
-          best = cand;
+      // 核心课来源集合（如人工智能方向至少 1 门来自指定课程）：缺口未满足时优先该集合
+      if (
+        options.coreOnly &&
+        coreFromSet.size > 0 &&
+        coreFromHit < 1 &&
+        remainingCoreCount > 0
+      ) {
+        const fromGroups = groups.filter((arr) =>
+          coreFromSet.has(courseBaseName(arr[0].name)),
+        );
+        for (const arr of fromGroups) {
+          const cand = bestOf(arr);
+          if (cand && (!best || cand.id.localeCompare(best.id) < 0)) {
+            best = cand;
+          }
+        }
+      }
+      if (!best) {
+        for (const arr of groups) {
+          const cand = bestOf(arr);
+          if (cand && (!best || cand.id.localeCompare(best.id) < 0)) {
+            best = cand;
+          }
         }
       }
       if (!best) break;
@@ -535,6 +719,7 @@ export function computeCourseRecommendations(
       added += 1;
       if (options.coreOnly && isCore(best)) {
         remainingCoreCount = Math.max(0, remainingCoreCount - 1);
+        if (coreFromSet.has(courseBaseName(best.name))) coreFromHit += 1;
       }
       if (options.proOnly && isPro(best)) {
         remainingProCount = Math.max(0, remainingProCount - 1);
@@ -611,7 +796,13 @@ export function computeCourseRecommendations(
     const c = rec.course;
     if (idSeen.has(c.id)) return false;
     if (baseSeen.has(courseBaseName(c.name))) return false;
-    if (rec.bucket === 'degree' && !librarySet.has(c.name)) return false;
+    if (
+      rec.bucket === 'degree' &&
+      !librarySet.has(c.name) &&
+      !libraryBaseSet.has(courseBaseName(c.name))
+    ) {
+      return false;
+    }
     if (
       rec.bucket === 'professionalNonDegree' &&
       (c.college !== plan.homeCollege || bucketOf(c) !== 'professionalNonDegree')
@@ -632,7 +823,11 @@ export function computeCourseRecommendations(
         .some((other) => coursesConflict(rec.course, other.course)),
   );
 
-  return { rows: finalRows.slice(0, 10), unsatisfied };
+  return {
+    rows: finalRows.slice(0, 10),
+    unsatisfied,
+    degreeRolePendingCount: pendingDegreeRoleCount,
+  };
 }
 
 export function categorizeRequirement(
@@ -785,6 +980,7 @@ export type BackupPayload = {
   earnedCredits?: Record<string, number>;
   customDatasets?: CourseDataset[];
   englishExemption?: boolean;
+  degreeRoles?: Record<string, Record<string, DegreeRole>>;
 };
 
 // Parse and validate a full backup file produced by "导出备份".
@@ -794,6 +990,7 @@ export function parseBackupPayload(text: string): {
   earnedCredits: Record<string, number>;
   customDatasets: CourseDataset[];
   englishExemption: boolean;
+  degreeRoles: Record<string, Record<string, DegreeRole>>;
 } {
   let parsed: unknown;
   try {
@@ -859,10 +1056,38 @@ export function parseBackupPayload(text: string): {
     earnedCredits = Object.fromEntries(entries) as Record<string, number>;
   }
 
+  let degreeRoles: Record<string, Record<string, DegreeRole>> = {};
+  if (record.degreeRoles !== undefined) {
+    if (!record.degreeRoles || typeof record.degreeRoles !== 'object') {
+      throw new Error('备份中的学位属性（degreeRoles）格式不正确。');
+    }
+    const termEntries = Object.entries(record.degreeRoles).filter(
+      ([, termRoles]) => {
+        if (
+          !termRoles ||
+          typeof termRoles !== 'object' ||
+          Array.isArray(termRoles)
+        ) {
+          return false;
+        }
+        return Object.values(termRoles).every(
+          (role) => role === 'degree' || role === 'nonDegree',
+        );
+      },
+    );
+    if (termEntries.length !== Object.keys(record.degreeRoles).length) {
+      throw new Error('备份中的部分学位属性记录格式不正确，无法恢复。');
+    }
+    degreeRoles = Object.fromEntries(
+      termEntries,
+    ) as Record<string, Record<string, DegreeRole>>;
+  }
+
   const hasContent =
     datasets.length > 0 ||
     Object.keys(selectedByTerm).length > 0 ||
     Object.keys(earnedCredits).length > 0 ||
+    Object.keys(degreeRoles).length > 0 ||
     record.englishExemption === true;
   if (!hasContent) {
     throw new Error('备份文件中没有可恢复的数据。');
@@ -875,5 +1100,6 @@ export function parseBackupPayload(text: string): {
     earnedCredits,
     customDatasets: datasets,
     englishExemption: record.englishExemption === true,
+    degreeRoles,
   };
 }

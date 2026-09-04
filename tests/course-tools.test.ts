@@ -6,12 +6,17 @@ import assert from 'node:assert/strict';
 import {
   type Course,
   type Schedule,
+  bucketForRole,
   categorizeRequirement,
   compactTermLabel,
   computeCourseRecommendations,
   courseBaseName,
   courseColorIndex,
   courseConflictsInWeek as conflictsInWeek,
+  courseDegreeRoleKind,
+  courseMatchesSubject,
+  courseSubjectDisplay,
+  courseSubjectNames,
   coursesConflict,
   csvCell,
   formatConflictSlot,
@@ -19,6 +24,8 @@ import {
   formatWeekRanges,
   getConflictSlots,
   isCourse,
+  isDegreeRoleSettable,
+  isForcedNonDegreeCategory,
   isMasterEnglishCourseName,
   isSchedule,
   parseBackupPayload,
@@ -486,4 +493,242 @@ test('computeCourseRecommendations: 遵循硬性约束', () => {
 test('数据事实: courses.json 不应有课程级冲突缺陷（回归锚点）', () => {
   // 保证样例 fixture 自身结构被 isCourse 接受
   assert.equal(isCourse(makeCourse()), true);
+});
+
+test('degreeRole 归类: 核心课可设学位/非学位，研讨课强制非学位，公共课不适用', () => {
+  assert.equal(isDegreeRoleSettable('专业核心课'), true);
+  assert.equal(isDegreeRoleSettable('学科核心课'), true);
+  assert.equal(isDegreeRoleSettable('专业课'), true);
+  assert.equal(isDegreeRoleSettable('研讨课'), false);
+  assert.equal(isForcedNonDegreeCategory('研讨课'), true);
+  assert.equal(isForcedNonDegreeCategory('实验课'), true);
+  assert.equal(isForcedNonDegreeCategory('实践课'), true);
+  assert.equal(isForcedNonDegreeCategory('科学前沿讲座'), true);
+  assert.equal(isForcedNonDegreeCategory('专业核心课'), false);
+
+  assert.equal(courseDegreeRoleKind({ category: '专业课', name: 'X' }), 'settable');
+  assert.equal(courseDegreeRoleKind({ category: '研讨课', name: 'X' }), 'forcedNonDegree');
+  assert.equal(courseDegreeRoleKind({ category: '公共必修课', name: 'X' }), 'none');
+
+  // bucketForRole: 核心课+degree → 学位课；核心课+nonDegree → 专业非学位课；未设置 → null
+  assert.equal(bucketForRole('专业核心课', 'X', 'degree', true), 'degree');
+  assert.equal(bucketForRole('专业课', 'X', 'nonDegree', true), 'professionalNonDegree');
+  assert.equal(bucketForRole('学科核心课', 'X', null, true), null);
+  // 研讨课强制非学位
+  assert.equal(bucketForRole('研讨课', 'X', null, true), 'professionalNonDegree');
+  assert.equal(bucketForRole('实验课', 'X', 'degree', true), 'professionalNonDegree');
+  // 公共课不受 degreeRole 影响
+  assert.equal(bucketForRole('公共必修课', 'X', null, true), 'publicRequired');
+});
+
+test('courseSubjects / 多专业归属与筛选', () => {
+  const multi = makeCourse({
+    subject: '计算机技术',
+    subjects: [
+      { code: '085404', name: '计算机技术' },
+      { code: '085410', name: '人工智能' },
+    ],
+  });
+  assert.deepEqual(courseSubjectNames(multi), ['计算机技术', '人工智能']);
+  assert.equal(
+    courseSubjectDisplay(multi),
+    '085404 计算机技术、085410 人工智能',
+  );
+  assert.equal(courseMatchesSubject(multi, '085410'), true);
+  assert.equal(courseMatchesSubject(multi, '人工智能'), true);
+  assert.equal(courseMatchesSubject(multi, '物理电子学'), false);
+
+  // 兼容旧数据：只有 subject 字段时
+  const single = makeCourse({ subject: '物理电子学' });
+  assert.deepEqual(courseSubjectNames(single), ['物理电子学']);
+  assert.equal(courseMatchesSubject(single, '物理电子学'), true);
+});
+
+test('computeCourseRecommendations: 学位课缺口只统计标记为学位课的已选核心/专业课', () => {
+  const colHome = '物理与光电工程学院';
+  const mk = (id: string, category: string, name: string) =>
+    makeCourse({ id, category, name, college: colHome, credits: 3 });
+  const coreA = mk('c1', '专业核心课', '本专业核心一');
+  const proA = mk('p1', '专业课', '本专业专业课一');
+  const plan = {
+    coreCourses: ['本专业核心一'],
+    professionalCourses: ['本专业专业课一'],
+    coreMinimum: 1,
+    professionalMinimum: 1,
+    degreeCourseCredits: 12,
+    professionalNonDegreeCredits: null,
+    publicRequiredCredits: 0,
+    publicElectiveCredits: 0,
+    innovationCredits: null,
+    homeCollege: colHome,
+  };
+  const base = {
+    courses: [coreA, proA],
+    selectedIds: ['c1', 'p1'],
+    earnedByBucket: {},
+    plan,
+    englishExemption: false,
+  };
+  // 已选但未标记学位属性 → degreeRolePendingCount = 2，学位课缺口仍存在
+  const resPending = computeCourseRecommendations({
+    ...base,
+    selectedCourses: [coreA, proA],
+  });
+  assert.equal(resPending.degreeRolePendingCount, 2);
+  // 已选并标记为学位课 → pending 归零，缺学分时按 core/pro 补齐推荐
+  const resDegree = computeCourseRecommendations({
+    ...base,
+    selectedCourses: [coreA, proA],
+    degreeRoles: { c1: 'degree', p1: 'degree' },
+  });
+  assert.equal(resDegree.degreeRolePendingCount, 0);
+  const names = resDegree.rows.map((r) => r.course.name);
+  assert.equal(
+    names.some((n) => n === '本专业核心一' || n === '本专业专业课一'),
+    false, // 已选的同基础课程不会再推荐
+  );
+});
+
+test('computeCourseRecommendations: coreFrom 来源集合优先推荐（人工智能方向）', () => {
+  const colHome = '物理与光电工程学院';
+  const mk = (id: string, name: string, extra: Partial<Course> = {}) =>
+    makeCourse({ id, name, college: colHome, credits: 3, ...extra });
+  const coreNLP = mk('n1', '自然语言处理', { category: '专业核心课' });
+  const coreAI = mk('n2', '高级人工智能', { category: '专业核心课' });
+  const coreMath = mk('n3', '人工智能的数学基础与应用', {
+    category: '专业核心课',
+  });
+  const plan = {
+    coreCourses: ['自然语言处理', '高级人工智能', '人工智能的数学基础与应用'],
+    professionalCourses: [],
+    coreMinimum: 2,
+    professionalMinimum: 0,
+    degreeCourseCredits: 12,
+    professionalNonDegreeCredits: null,
+    publicRequiredCredits: 0,
+    publicElectiveCredits: 0,
+    innovationCredits: null,
+    homeCollege: colHome,
+    coreFrom: ['高级人工智能', '自然语言处理'],
+  };
+  const res = computeCourseRecommendations({
+    courses: [coreNLP, coreAI, coreMath],
+    selectedCourses: [],
+    selectedIds: [],
+    earnedByBucket: {},
+    plan,
+    englishExemption: false,
+  });
+  const names = res.rows.map((r) => r.course.name);
+  // 优先从来源集合（高级人工智能/自然语言处理）推荐
+  assert.ok(
+    names[0] === '高级人工智能' || names[0] === '自然语言处理',
+    `期望来源集合课程优先，实际 ${names.join('、')}`,
+  );
+  // 同课不同班只推一个
+  const resDup = computeCourseRecommendations({
+    courses: [
+      mk('a1', '英语A-01班-学术读写', { category: '公共必修课', credits: 3 }),
+      mk('a2', '英语A-02班-学术读写', { category: '公共必修课', credits: 3 }),
+    ],
+    selectedCourses: [],
+    selectedIds: [],
+    earnedByBucket: {},
+    plan: {
+      ...plan,
+      coreCourses: [],
+      professionalCourses: [],
+      coreMinimum: 0,
+      publicRequiredCredits: 3,
+    },
+    englishExemption: false,
+  });
+  assert.equal(resDup.rows.length, 1);
+});
+
+test('computeCourseRecommendations: 同课带班号只推荐一个班、已选某班不推其他班', () => {
+  const home = '物理与光电工程学院';
+  const mkSection = (id: string, name: string, start: number) =>
+    makeCourse({
+      id,
+      name,
+      college: home,
+      category: '专业核心课',
+      credits: 3,
+      schedules: [makeSchedule(0, start, start + 1, [1, 2, 3])],
+    });
+  const sec1 = mkSection('s1', '核心一-01班', 3);
+  const sec2 = mkSection('s2', '核心一-02班', 5);
+  const plan = {
+    coreCourses: ['核心一'],
+    professionalCourses: [],
+    coreMinimum: 1,
+    professionalMinimum: 0,
+    degreeCourseCredits: 6,
+    professionalNonDegreeCredits: null,
+    publicRequiredCredits: 0,
+    publicElectiveCredits: 0,
+    innovationCredits: null,
+    homeCollege: home,
+  };
+  // 两个班互不冲突 → 只推荐其中一个班
+  const res = computeCourseRecommendations({
+    courses: [sec1, sec2],
+    selectedCourses: [],
+    selectedIds: [],
+    earnedByBucket: {},
+    plan,
+    englishExemption: false,
+  });
+  assert.equal(res.rows.length, 1);
+  assert.ok(/核心一/.test(res.rows[0].course.name));
+  // 已选 01 班后不再推荐 02 班
+  const resSelected = computeCourseRecommendations({
+    courses: [sec1, sec2],
+    selectedCourses: [sec1],
+    selectedIds: [sec1.id],
+    earnedByBucket: {},
+    plan,
+    englishExemption: false,
+  });
+  assert.ok(
+    resSelected.rows.every(
+      (row) => courseBaseName(row.course.name) !== '核心一',
+    ),
+  );
+});
+
+test('parseBackupPayload: 学位属性（degreeRoles）往返与容错', () => {
+  const payload = {
+    app: 'hias-csadeepseek',
+    version: 2,
+    activeTermId: '2026-fall',
+    degreeRoles: { '2026-fall': { c1: 'degree', p1: 'nonDegree' } },
+    englishExemption: true,
+  };
+  const backup = parseBackupPayload(JSON.stringify(payload));
+  assert.deepEqual(backup.degreeRoles, {
+    '2026-fall': { c1: 'degree', p1: 'nonDegree' },
+  });
+  // 非法角色 → 解析失败
+  assert.throws(
+    () =>
+      parseBackupPayload(
+        JSON.stringify({
+          ...payload,
+          degreeRoles: { '2026-fall': { c1: 'bogus' } },
+        }),
+      ),
+    /学位属性/,
+  );
+  // 旧备份（无 degreeRoles 字段）仍可解析
+  const legacy = parseBackupPayload(
+    JSON.stringify({
+      app: 'hias-csadeepseek',
+      version: 1,
+      activeTermId: '2026-fall',
+      selectedByTerm: { '2026-fall': ['1'] },
+    }),
+  );
+  assert.deepEqual(legacy.degreeRoles, {});
 });
