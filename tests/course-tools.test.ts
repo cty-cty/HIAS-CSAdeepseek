@@ -8,6 +8,7 @@ import {
   type Schedule,
   categorizeRequirement,
   compactTermLabel,
+  computeCourseRecommendations,
   courseBaseName,
   courseColorIndex,
   courseConflictsInWeek as conflictsInWeek,
@@ -386,6 +387,100 @@ test('isMasterEnglishCourseName: 识别英语学位班级课', () => {
   assert.equal(isMasterEnglishCourseName('英语B-01班-学术读写'), true);
   assert.equal(isMasterEnglishCourseName('高级英语口语（1）-01班'), false);
   assert.equal(isMasterEnglishCourseName('心理学与心理健康'), false);
+});
+
+test('computeCourseRecommendations: 遵循硬性约束', () => {
+  const colHome = '物理与光电工程学院';
+  const mk = (
+    id: string,
+    category: string,
+    name: string,
+    extra: Partial<Course> = {},
+  ) => makeCourse({ id, category, name, college: colHome, credits: 2, ...extra });
+
+  const core1 = mk('c1', '专业核心课', '本专业核心一', { credits: 3 });
+  const pro1 = mk('p1', '专业课', '本专业专业课一', { credits: 2 });
+  const cross = mk('x1', '专业核心课', '他专业核心', { credits: 3 });
+  const nonDeg = mk('n1', '研讨课', '本学院研讨');
+  const nonDegOther = mk('n2', '研讨课', '外院研讨', { college: '化材学院' });
+  const pub = mk('r1', '公共必修课', '自然辩证法概论-01班', { credits: 1 });
+  const pub2 = mk('r2', '公共必修课', '自然辩证法概论-02班', { credits: 1 });
+  const elect = mk('e1', '公共选修课', '心理学与心理健康', { credits: 1 });
+  const innov = mk('i1', '公共选修课', '创业管理', { credits: 1 });
+  const courses = [core1, pro1, cross, nonDeg, nonDegOther, pub, pub2, elect, innov];
+
+  const plan = {
+    coreCourses: ['本专业核心一'],
+    professionalCourses: ['本专业专业课一'],
+    coreMinimum: 1,
+    professionalMinimum: 1,
+    degreeCourseCredits: 3,
+    professionalNonDegreeCredits: 2,
+    publicRequiredCredits: 1,
+    publicElectiveCredits: 0,
+    innovationCredits: 1,
+    homeCollege: colHome,
+  };
+  const res = computeCourseRecommendations({
+    courses,
+    selectedCourses: [],
+    selectedIds: [],
+    earnedByBucket: {},
+    plan,
+    englishExemption: false,
+  });
+  const names = res.rows.map((r) => r.course.name);
+  // 学位课仅限本专业课程库
+  for (const r of res.rows) {
+    if (r.bucket === 'degree') {
+      assert.ok(
+        plan.coreCourses.includes(r.course.name) ||
+          plan.professionalCourses.includes(r.course.name),
+      );
+    }
+  }
+  assert.ok(!names.includes('他专业核心'));
+  // 专业非学位课仅限本学院
+  for (const r of res.rows) {
+    if (r.bucket === 'professionalNonDegree') {
+      assert.equal(r.course.college, colHome);
+    }
+  }
+  assert.ok(!names.includes('外院研讨'));
+  // 公共必修同课不同班只出现一节 + 无重复 id
+  const pubBases = res.rows
+    .filter((r) => r.bucket === 'publicRequired')
+    .map((r) => courseBaseName(r.course.name));
+  assert.equal(new Set(pubBases).size, pubBases.length);
+  const ids = res.rows.map((r) => r.course.id);
+  assert.equal(new Set(ids).size, ids.length);
+
+  // 英语免修：不推荐英语课程
+  const en = mk('en1', '公共必修课', '英语A-01班-学术读写', { credits: 3 });
+  const res2 = computeCourseRecommendations({
+    courses: [...courses, en],
+    selectedCourses: [],
+    selectedIds: [],
+    earnedByBucket: { publicRequired: 0 },
+    plan: { ...plan, publicRequiredCredits: 4 },
+    englishExemption: true,
+  });
+  assert.ok(
+    res2.rows.every((r) => !isMasterEnglishCourseName(r.course.name)),
+  );
+
+  // 已选某班次后，其它班次不再推荐
+  const res3 = computeCourseRecommendations({
+    courses: [pub, pub2],
+    selectedCourses: [pub],
+    selectedIds: [pub.id],
+    earnedByBucket: {},
+    plan: { ...plan, publicRequiredCredits: 1 },
+    englishExemption: false,
+  });
+  assert.ok(
+    res3.rows.every((r) => courseBaseName(r.course.name) !== '自然辩证法概论'),
+  );
 });
 
 test('数据事实: courses.json 不应有课程级冲突缺陷（回归锚点）', () => {

@@ -259,6 +259,382 @@ export function isMasterEnglishCourseName(name: string) {
   return /^英语[AB]-|^英语[AB]\d|^硕士学位英语/.test(name.trim());
 }
 
+export type PlanForRecommendation = {
+  coreCourses: string[];
+  professionalCourses: string[];
+  coreMinimum: number;
+  professionalMinimum: number;
+  degreeCourseCredits: number;
+  professionalNonDegreeCredits: number | null;
+  publicRequiredCredits: number;
+  publicElectiveCredits: number;
+  innovationCredits: number | null;
+  homeCollege: string;
+};
+
+export type RecommendationInput = {
+  courses: Course[];
+  selectedCourses: Course[];
+  selectedIds: string[];
+  earnedByBucket: Partial<Record<RequirementBucketId, number>>;
+  plan: PlanForRecommendation;
+  englishExemption: boolean;
+};
+
+export type CourseRecommendation = {
+  course: Course;
+  bucket: RequirementBucketId;
+  reason: string;
+};
+
+export type RecommendationResult = {
+  rows: CourseRecommendation[];
+  unsatisfied: {
+    bucket: RequirementBucketId;
+    label: string;
+    remaining: number;
+  }[];
+};
+
+const RECOMMENDATION_LABELS: Record<RequirementBucketId, string> = {
+  publicRequired: '公共必修课',
+  degree: '专业学位课',
+  professionalNonDegree: '专业非学位课',
+  publicElective: '公共选修课',
+  innovation: '创新创业课',
+  other: '未归类课程',
+};
+
+function bucketLabel(bucket: RequirementBucketId) {
+  return RECOMMENDATION_LABELS[bucket];
+}
+
+function isFull(course: Course) {
+  return course.capacity > 0 && course.enrolled >= course.capacity;
+}
+
+function firstPeriod(course: Course) {
+  return Math.min(...course.schedules.map((s) => s.start));
+}
+
+function lastPeriod(course: Course) {
+  return Math.max(...course.schedules.map((s) => s.end));
+}
+
+function span(course: Course) {
+  return lastPeriod(course) - firstPeriod(course);
+}
+
+function earlyLatePenalty(course: Course) {
+  let penalty = 0;
+  for (const s of course.schedules) {
+    if (s.start <= 2) penalty += 1;
+    if (s.end >= 12) penalty += 1;
+  }
+  return penalty;
+}
+
+function sectionNumber(name: string) {
+  return name.match(/[-—－]?0*(\d+)班/)?.[1] ?? name;
+}
+
+export function computeCourseRecommendations(
+  input: RecommendationInput,
+): RecommendationResult {
+  const { courses, selectedCourses, selectedIds, earnedByBucket, plan } = input;
+  const englishExemption = input.englishExemption;
+  const selectedIdSet = new Set<string>(selectedIds);
+  const blocked = [...selectedCourses];
+  const chosen: CourseRecommendation[] = [];
+  const usedBase = new Set<string>(
+    selectedCourses.map((c) => courseBaseName(c.name)),
+  );
+
+  const coreSet = new Set(plan.coreCourses);
+  const proSet = new Set(plan.professionalCourses);
+  const librarySet = new Set([...plan.coreCourses, ...plan.professionalCourses]);
+
+  const bucketOf = (course: Course): RequirementBucketId => {
+    const b = categorizeRequirement(course.category, course.name);
+    return b === 'innovation' && plan.innovationCredits === null
+      ? 'publicElective'
+      : b;
+  };
+  const isCore = (c: Course) => coreSet.has(c.name);
+  const isPro = (c: Course) => proSet.has(c.name);
+  const isMasterEnglish = (c: Course) => isMasterEnglishCourseName(c.name);
+
+  const valid = (c: Course) =>
+    c.credits > 0 &&
+    c.schedules.length > 0 &&
+    !isFull(c) &&
+    !(englishExemption && isMasterEnglish(c));
+
+  const selByBucket = new Map<RequirementBucketId, number>();
+  let selCoreCount = 0;
+  let selProCount = 0;
+  let selCoreCredits = 0;
+  let selProCredits = 0;
+  for (const c of selectedCourses) {
+    const b = bucketOf(c);
+    selByBucket.set(b, (selByBucket.get(b) ?? 0) + c.credits);
+    if (b === 'degree') {
+      if (isCore(c)) {
+        selCoreCount += 1;
+        selCoreCredits += c.credits;
+      } else if (isPro(c)) {
+        selProCount += 1;
+        selProCredits += c.credits;
+      }
+    }
+  }
+  const sel = (b: RequirementBucketId) => selByBucket.get(b) ?? 0;
+  const earned = (b: RequirementBucketId) => earnedByBucket[b] ?? 0;
+  const englishExemptCredits = englishExemption ? MASTER_ENGLISH_CREDITS : 0;
+
+  const publicRequiredGap =
+    plan.publicRequiredCredits -
+    earned('publicRequired') -
+    sel('publicRequired') -
+    englishExemptCredits;
+  const nonDegreeGap =
+    plan.professionalNonDegreeCredits === null
+      ? 0
+      : plan.professionalNonDegreeCredits -
+        earned('professionalNonDegree') -
+        sel('professionalNonDegree');
+  const publicElectiveGap =
+    plan.publicElectiveCredits - earned('publicElective') - sel('publicElective');
+  const innovationGap =
+    plan.innovationCredits === null
+      ? 0
+      : plan.innovationCredits - earned('innovation') - sel('innovation');
+
+  const needCoreCount = Math.max(0, plan.coreMinimum - selCoreCount);
+  const needProCount = Math.max(0, plan.professionalMinimum - selProCount);
+  const degreeCreditsGap = Math.max(
+    0,
+    plan.degreeCourseCredits - earned('degree') - selCoreCredits - selProCredits,
+  );
+  let remainingCoreCount = needCoreCount;
+  let remainingProCount = needProCount;
+
+  const pools: { bucket: RequirementBucketId; pool: Course[] }[] = [
+    {
+      bucket: 'publicRequired',
+      pool: courses.filter((c) => valid(c) && bucketOf(c) === 'publicRequired'),
+    },
+    {
+      bucket: 'degree',
+      pool: courses.filter((c) => valid(c) && librarySet.has(c.name)),
+    },
+    {
+      bucket: 'professionalNonDegree',
+      pool: courses.filter(
+        (c) =>
+          valid(c) &&
+          bucketOf(c) === 'professionalNonDegree' &&
+          c.college === plan.homeCollege,
+      ),
+    },
+    {
+      bucket: 'publicElective',
+      pool: courses.filter((c) => valid(c) && bucketOf(c) === 'publicElective'),
+    },
+    {
+      bucket: 'innovation',
+      pool:
+        plan.innovationCredits === null
+          ? []
+          : courses.filter((c) => valid(c) && bucketOf(c) === 'innovation'),
+    },
+  ];
+
+  const unsatisfied: RecommendationResult['unsatisfied'] = [];
+
+  function bestOf(candidates: Course[]): Course | null {
+    const passable = candidates.filter(
+      (c) =>
+        !selectedIdSet.has(c.id) &&
+        !blocked.some((b) => b.id !== c.id && coursesConflict(c, b)),
+    );
+    if (!passable.length) return null;
+    passable.sort((a, b) => {
+      const ap = earlyLatePenalty(a);
+      const bp = earlyLatePenalty(b);
+      const capA = (a.capacity ?? 0) - (a.enrolled ?? 0);
+      const capB = (b.capacity ?? 0) - (b.enrolled ?? 0);
+      if (ap !== bp) return ap - bp;
+      if (a.schedules.length !== b.schedules.length) {
+        return a.schedules.length - b.schedules.length;
+      }
+      if (span(a) !== span(b)) return span(a) - span(b);
+      if (capA !== capB) return capB - capA;
+      return a.id.localeCompare(b.id);
+    });
+    return passable[0];
+  }
+
+  function add(bucket: RequirementBucketId, course: Course, reason: string) {
+    const sectionCount = courses.filter(
+      (c) =>
+        valid(c) &&
+        bucketOf(c) === bucket &&
+        courseBaseName(c.name) === courseBaseName(course.name),
+    ).length;
+    const note =
+      sectionCount > 1
+        ? `同课程有 ${sectionCount} 个班次，推荐 ${sectionNumber(course.name)}班`
+        : '';
+    chosen.push({
+      course,
+      bucket,
+      reason: note ? `${reason}；${note}` : reason,
+    });
+    blocked.push(course);
+    selectedIdSet.add(course.id);
+    usedBase.add(courseBaseName(course.name));
+  }
+
+  function grouped(pool: Course[]) {
+    const map = new Map<string, Course[]>();
+    for (const c of pool) {
+      const base = courseBaseName(c.name);
+      if (usedBase.has(base) || selectedIdSet.has(c.id)) continue;
+      const arr = map.get(base) ?? [];
+      arr.push(c);
+      map.set(base, arr);
+    }
+    return [...map.values()];
+  }
+
+  function fillBucket(
+    bucket: RequirementBucketId,
+    pool: Course[],
+    remaining: number,
+    options: { coreOnly?: boolean; proOnly?: boolean; countLimit?: number },
+  ) {
+    let added = 0;
+    while (remaining > 0 && (options.countLimit === undefined || added < options.countLimit)) {
+      const groups = grouped(pool).filter((arr) => {
+        if (options.coreOnly) return isCore(arr[0]);
+        if (options.proOnly) return isPro(arr[0]);
+        return true;
+      });
+      if (!groups.length) break;
+      let best: Course | null = null;
+      for (const arr of groups) {
+        const cand = bestOf(arr);
+        if (cand && (!best || cand.id.localeCompare(best.id) < 0)) {
+          best = cand;
+        }
+      }
+      if (!best) break;
+      const credit = best.credits;
+      add(bucket, best, reasonFor(bucket, best));
+      added += 1;
+      if (options.coreOnly && isCore(best)) {
+        remainingCoreCount = Math.max(0, remainingCoreCount - 1);
+      }
+      if (options.proOnly && isPro(best)) {
+        remainingProCount = Math.max(0, remainingProCount - 1);
+      }
+      remaining = Math.max(0, remaining - credit);
+    }
+    return remaining;
+  }
+
+  function reasonFor(bucket: RequirementBucketId, course: Course): string {
+    if (bucket === 'degree') {
+      if (isCore(course)) {
+        return remainingCoreCount > 0
+          ? `本专业核心课，核心课要求还差 ${remainingCoreCount} 门`
+          : '本专业核心课，补齐专业学位课学分';
+      }
+      if (isPro(course)) {
+        return remainingProCount > 0
+          ? `本专业专业课，专业课要求还差 ${remainingProCount} 门`
+          : '本专业专业课，补齐专业学位课学分';
+      }
+      return '本专业学位课，补齐专业学位课学分';
+    }
+    if (bucket === 'professionalNonDegree') {
+      const cat = course.category || '课程';
+      return `本学院${cat}，专业非学位课还缺学分`;
+    }
+    if (bucket === 'publicElective') return '公共选修课，选中可补足公共选修学分';
+    if (bucket === 'innovation') return '创新创业模块课，选中可补足创新创业学分';
+    return '公共必修课，选中可补足公共必修学分';
+  }
+
+  const publicRemaining = fillBucket('publicRequired', pools[0].pool, publicRequiredGap, {});
+  if (publicRemaining > 0) {
+    unsatisfied.push({ bucket: 'publicRequired', label: bucketLabel('publicRequired'), remaining: publicRemaining });
+  }
+
+  let degreeRemaining = degreeCreditsGap;
+  // 先按门数：核心课门数不足则优先补核心课
+  degreeRemaining = fillBucket('degree', pools[1].pool, degreeRemaining, {
+    coreOnly: true,
+    countLimit: needCoreCount,
+  });
+  // 专业课门数不足再补专业课
+  degreeRemaining = fillBucket('degree', pools[1].pool, degreeRemaining, {
+    proOnly: true,
+    countLimit: needProCount,
+  });
+  // 门数满足但仍缺学分，从核心+专业课中补
+  degreeRemaining = fillBucket('degree', pools[1].pool, degreeRemaining, {});
+  if (degreeRemaining > 0) {
+    unsatisfied.push({ bucket: 'degree', label: bucketLabel('degree'), remaining: degreeRemaining });
+  }
+
+  const nonDegreeRemaining = fillBucket('professionalNonDegree', pools[2].pool, nonDegreeGap, {});
+  if (nonDegreeRemaining > 0) {
+    unsatisfied.push({ bucket: 'professionalNonDegree', label: bucketLabel('professionalNonDegree'), remaining: nonDegreeRemaining });
+  }
+
+  const electiveRemaining = fillBucket('publicElective', pools[3].pool, publicElectiveGap, {});
+  if (electiveRemaining > 0) {
+    unsatisfied.push({ bucket: 'publicElective', label: bucketLabel('publicElective'), remaining: electiveRemaining });
+  }
+
+  const innovationRemaining = fillBucket('innovation', pools[4].pool, innovationGap, {});
+  if (innovationRemaining > 0) {
+    unsatisfied.push({ bucket: 'innovation', label: bucketLabel('innovation'), remaining: innovationRemaining });
+  }
+
+  // 校验：重复 / 跨专业 / 跨学院 / 英语免修 / 与已选冲突
+  const idSeen = new Set<string>();
+  const baseSeen = new Set<string>();
+  const validated = chosen.filter((rec) => {
+    const c = rec.course;
+    if (idSeen.has(c.id)) return false;
+    if (baseSeen.has(courseBaseName(c.name))) return false;
+    if (rec.bucket === 'degree' && !librarySet.has(c.name)) return false;
+    if (
+      rec.bucket === 'professionalNonDegree' &&
+      (c.college !== plan.homeCollege || bucketOf(c) !== 'professionalNonDegree')
+    ) {
+      return false;
+    }
+    if (englishExemption && isMasterEnglish(c)) return false;
+    if (selectedCourses.some((s) => coursesConflict(s, c))) return false;
+    idSeen.add(c.id);
+    baseSeen.add(courseBaseName(c.name));
+    return true;
+  });
+  // 推荐课程彼此不得冲突
+  const finalRows = validated.filter(
+    (rec, index) =>
+      !validated
+        .slice(index + 1)
+        .some((other) => coursesConflict(rec.course, other.course)),
+  );
+
+  return { rows: finalRows.slice(0, 10), unsatisfied };
+}
+
 export function categorizeRequirement(
   category: string,
   courseName = '',

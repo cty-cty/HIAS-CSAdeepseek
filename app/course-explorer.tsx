@@ -48,6 +48,7 @@ import {
   type Schedule,
   categorizeRequirement,
   compactTermLabel,
+  computeCourseRecommendations,
   courseBaseName,
   courseColorIndex,
   courseConflictsInWeek,
@@ -83,8 +84,8 @@ import {
 import EnrollmentNotice from '@/app/enrollment-notice';
 import { PROGRAM_PLANS } from '@/app/program-plans';
 
-// 智能选课建议开关：暂时下架（置 false 隐藏卡片，逻辑保留，恢复时改回 true）。
-const SHOW_SMART_SUGGESTIONS = false;
+// 智能选课建议开关：置 true 开启（推荐算法见 lib/course-tools.ts）。
+const SHOW_SMART_SUGGESTIONS = true;
 const DEFAULT_TERM_ID = '2026-fall';
 const DEFAULT_TERM_LABEL = '2026—2027学年(秋)第一学期';
 // 当前学年后续学期（暂无数据，选到即显示"无课程数据"，可导入覆盖）
@@ -227,6 +228,7 @@ type RequirementBucket = {
 type PlanSuggestion = {
   course: Course;
   gapLabel: string;
+  reason: string;
 };
 
 type PlanGap = {
@@ -996,84 +998,45 @@ export default function CourseExplorer({
     rows: PlanSuggestion[];
     unsatisfied: PlanGap[];
   }>(() => {
-    const gaps = requirementBuckets
-      .filter(
-        (bucket) =>
-          bucket.required !== null &&
-          bucket.selected + bucket.earned < (bucket.required as number),
-      )
-      .map((bucket) => ({
-        id: bucket.id,
-        label: bucket.label,
-        shortfall:
-          (bucket.required as number) - bucket.selected - bucket.earned,
-      }))
-      .sort((a, b) => b.shortfall - a.shortfall);
-    if (!gaps.length) return { rows: [], unsatisfied: [] };
-
-    const rows: PlanSuggestion[] = [];
-    const busyIds = new Set<string>(selectedIds);
-    const busyBaseNames = new Set<string>(
-      selectedCourses.map((course) => courseBaseName(course.name)),
-    );
-    const blockedCourses = [...selectedCourses];
-    // 专业学位课只允许推荐当前培养方向课程库中的课程（如光电信息工程仅推光电的课程）。
-    const degreeLibrary = new Set<string>([
-      ...activePlan.coreCourses,
-      ...activePlan.professionalCourses,
-    ]);
-    const coveredByGap = new Map<string, number>();
-    const openIds = new Set(gaps.map((gap) => gap.id));
-    let guard = 0;
-    while (openIds.size > 0 && guard < 40) {
-      guard += 1;
-      const gap = gaps.find((item) => openIds.has(item.id));
-      if (!gap) break;
-      const candidates = initialCourses
-        .filter((course) => {
-          if (busyIds.has(course.id)) return false;
-          if (busyBaseNames.has(courseBaseName(course.name))) return false;
-          if (englishExemption && isMasterEnglishCourseName(course.name)) {
-            return false;
-          }
-          if (bucketOfCourse(course) !== gap.id) return false;
-          if (gap.id === 'degree' && !degreeLibrary.has(course.name)) {
-            return false;
-          }
-          return !blockedCourses.some((blocked) =>
-            coursesConflict(course, blocked),
-          );
-        })
-        .sort(
-          (a, b) =>
-            b.credits - a.credits ||
-            a.name.localeCompare(b.name, 'zh-Hans-CN'),
-        );
-      if (!candidates.length) {
-        openIds.delete(gap.id);
-        continue;
-      }
-      const course = candidates[0];
-      rows.push({ course, gapLabel: gap.label });
-      busyIds.add(course.id);
-      busyBaseNames.add(courseBaseName(course.name));
-      blockedCourses.push(course);
-      const covered = (coveredByGap.get(gap.id) ?? 0) + course.credits;
-      coveredByGap.set(gap.id, covered);
-      if (covered >= gap.shortfall) openIds.delete(gap.id);
-    }
-    const unsatisfied = gaps
-      .filter((gap) => (coveredByGap.get(gap.id) ?? 0) < gap.shortfall)
-      .map((gap) => ({
-        label: gap.label,
-        remaining: Math.round(
-          (gap.shortfall - (coveredByGap.get(gap.id) ?? 0)) * 100,
-        ) / 100,
-      }));
-    return { rows: rows.slice(0, 10), unsatisfied };
+    const result = computeCourseRecommendations({
+      courses: initialCourses,
+      selectedCourses,
+      selectedIds,
+      earnedByBucket: Object.fromEntries(earnedByBucket) as Record<
+        RequirementBucketId,
+        number
+      >,
+      plan: {
+        coreCourses: activePlan.coreCourses,
+        professionalCourses: activePlan.professionalCourses,
+        coreMinimum: activePlan.coreMinimum,
+        professionalMinimum: activePlan.professionalMinimum,
+        degreeCourseCredits: activePlan.degreeCourseCredits,
+        professionalNonDegreeCredits:
+          activePlan.professionalNonDegreeCredits,
+        publicRequiredCredits: activePlan.publicRequiredCredits,
+        publicElectiveCredits: activePlan.publicElectiveCredits,
+        innovationCredits: activePlan.innovationCredits,
+        homeCollege: activePlan.homeCollege ?? '',
+      },
+      englishExemption,
+    });
+    const labelOf = (bucket: RequirementBucketId) =>
+      requirementBuckets.find((b) => b.id === bucket)?.label ?? bucket;
+    return {
+      rows: result.rows.map((r) => ({
+        course: r.course,
+        gapLabel: labelOf(r.bucket),
+        reason: r.reason,
+      })),
+      unsatisfied: result.unsatisfied.map((u) => ({
+        label: u.label,
+        remaining: u.remaining,
+      })),
+    };
   }, [
     activePlan,
-    bucketOfCourse,
+    earnedByBucket,
     englishExemption,
     initialCourses,
     requirementBuckets,
@@ -2277,7 +2240,7 @@ export default function CourseExplorer({
                     依据「{activePlan.label}」学分缺口（含历史已修与本学期已选）自动推荐，优先以高学分课程补齐缺口。
                   </p>
                   <div className="mt-3 grid gap-2">
-                    {suggestions.rows.map(({ course, gapLabel }) => (
+                    {suggestions.rows.map(({ course, gapLabel, reason }) => (
                       <div
                         className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2"
                         key={course.id}
@@ -2298,6 +2261,9 @@ export default function CourseExplorer({
                             <span>{course.schedules[0]?.periodText || '时间待定'}</span>
                             <span>{course.teacher}</span>
                           </div>
+                          <p className="mt-0.5 text-[0.71rem] leading-4 text-slate-400">
+                            {reason}
+                          </p>
                         </div>
                         <Button
                           className="h-8 shrink-0 rounded-lg text-slate-600"
@@ -2317,13 +2283,20 @@ export default function CourseExplorer({
               )}
               {suggestions.unsatisfied.length > 0 && (
                 <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
-                  {suggestions.unsatisfied
-                    .map(
-                      (gap) =>
-                        `${gap.label}还差 ${formatCredits(gap.remaining)} 学分`,
-                    )
-                    .join('；')}
-                  ：本学期课表中暂无更多可选课程，可能安排在其它学期，或需线下确认。
+                  <p className="font-semibold">
+                    当前课程库中未找到符合条件且无冲突的课程，仍缺：
+                  </p>
+                  <p className="mt-1">
+                    {suggestions.unsatisfied
+                      .map(
+                        (gap) =>
+                          `${gap.label}还差 ${formatCredits(gap.remaining)} 学分`,
+                      )
+                      .join('；')}
+                  </p>
+                  <p className="mt-1">
+                    可能原因：本学科/本学院本学期未开设、与当前课表冲突、或培养方案课程未在本学期开课；也可在右上角「一键更新课程数据」导入补充学期数据。
+                  </p>
                 </div>
               )}
               {!suggestions.rows.length &&

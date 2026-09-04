@@ -14,6 +14,7 @@ export type ProgramPlan = {
   professionalMinimum: number;
   coreCourses: string[];
   professionalCourses: string[];
+  homeCollege?: string;
   note?: string;
   publicRequiredNote?: string;
 };
@@ -54,6 +55,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     innovationCredits: null,
     coreMinimum: 2,
     professionalMinimum: 2,
+    homeCollege: '物理与光电工程学院',
     coreCourses: PHYSICAL_ELECTRONICS_CORE,
     professionalCourses: PHYSICAL_ELECTRONICS_PROFESSIONAL,
     publicRequiredNote:
@@ -73,6 +75,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     innovationCredits: 1,
     coreMinimum: 2,
     professionalMinimum: 2,
+    homeCollege: '物理与光电工程学院',
     coreCourses: [
       '集成与微纳光子学',
       '高等光学原理',
@@ -110,6 +113,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     innovationCredits: 1,
     coreMinimum: 2,
     professionalMinimum: 2,
+    homeCollege: '物理与光电工程学院',
     coreCourses: ['自然语言处理', '高级人工智能', '人工智能的数学基础与应用'],
     professionalCourses: [
       '并行计算与实现技术',
@@ -134,6 +138,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     innovationCredits: 1,
     coreMinimum: 2,
     professionalMinimum: 2,
+    homeCollege: '物理与光电工程学院',
     coreCourses: [
       '有机合成精细化工基础',
       '现代有机波谱分析与运用',
@@ -166,6 +171,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     innovationCredits: null,
     coreMinimum: 2,
     professionalMinimum: 2,
+    homeCollege: '物理与光电工程学院',
     coreCourses: PHYSICAL_ELECTRONICS_CORE,
     professionalCourses: PHYSICAL_ELECTRONICS_PROFESSIONAL,
     publicRequiredNote:
