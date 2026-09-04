@@ -176,6 +176,14 @@ const COURSE_COLORS = [
   ['#f3dfe9', '#9c4b72'],
 ];
 
+// 移动端竖版卡片视图用：一门课程在某天的一个上课安排。
+type WeekScheduleCard = {
+  course: Course;
+  schedule: Schedule;
+  tone: string[];
+  conflict: boolean;
+};
+
 function getExamBucket(examMode: string): ExamBucketId {
   if (/闭卷/.test(examMode)) return 'closed';
   if (/开卷/.test(examMode)) return 'open';
@@ -1126,6 +1134,27 @@ export default function CourseExplorer({
     });
     return result;
   }, [selectedCourses, week]);
+
+  // 移动端竖版卡片视图：只取“第 week 周有课”的安排，按星期分组并按时段排序。
+  const weekSchedulesByDay = useMemo(() => {
+    const grouped: WeekScheduleCard[][] = DAYS.map(() => []);
+    selectedCourses.forEach((course) => {
+      const tone = COURSE_COLORS[courseColorIndex(course.id, COURSE_COLORS.length)];
+      const conflict = currentWeekConflicts.has(course.id);
+      course.schedules.forEach((schedule) => {
+        if (!schedule.weeks.includes(week)) return;
+        grouped[schedule.dayIndex]?.push({ course, schedule, tone, conflict });
+      });
+    });
+    grouped.forEach((cards) =>
+      cards.sort(
+        (left, right) =>
+          left.schedule.start - right.schedule.start ||
+          left.schedule.end - right.schedule.end,
+      ),
+    );
+    return grouped;
+  }, [currentWeekConflicts, selectedCourses, week]);
 
   const filteredCourses = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -2557,7 +2586,7 @@ export default function CourseExplorer({
                     {currentWeekConflicts.size} 门课程时间重叠，已用红色标出。
                   </div>
                 )}
-                <div className="overflow-x-auto pb-2">
+                <div className="hidden overflow-x-auto pb-2 md:block">
                   <div className="timetable-grid">
                     <div className="timetable-corner">节次</div>
                     {DAYS.map((label, index) => (
@@ -2627,6 +2656,96 @@ export default function CourseExplorer({
                         }),
                     )}
                   </div>
+                </div>
+
+                <div className="md:hidden">
+                  {weekSchedulesByDay.some((cards) => cards.length > 0) ? (
+                    <div className="flex flex-col gap-4">
+                      {DAYS.map((dayLabel, dayIndex) => {
+                        const cards = weekSchedulesByDay[dayIndex] ?? [];
+                        if (cards.length === 0) return null;
+                        return (
+                          <section key={dayLabel} aria-label={`${dayLabel}的课程`}>
+                            <div className="mb-2 flex items-center gap-2">
+                              <span className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-bold text-white">
+                                {dayLabel}
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {cards.length} 个时段
+                              </span>
+                              {cards.some((card) => card.conflict) && (
+                                <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[0.68rem] font-semibold text-rose-600">
+                                  <Zap className="size-3" /> 有冲突
+                                </span>
+                              )}
+                            </div>
+                            <ul className="flex flex-col gap-2">
+                              {cards.map(
+                                ({ course, schedule, tone, conflict }, cardIndex) => (
+                                  <li
+                                    key={`${course.id}-${dayIndex}-${schedule.start}-${schedule.end}-${cardIndex}`}
+                                  >
+                                  <button
+                                    aria-label={`${course.name} ${schedule.start === schedule.end ? `第${schedule.start}节` : `第${schedule.start}-${schedule.end}节`} ${schedule.room || ''} ${schedule.weeksText}`}
+                                    className={`flex w-full items-stretch gap-3 rounded-2xl border p-3 text-left shadow-sm transition active:scale-[0.99] ${
+                                      conflict
+                                        ? 'border-rose-200'
+                                        : 'border-slate-200/80'
+                                    }`}
+                                    onClick={() => setDetailCourse(course)}
+                                    type="button"
+                                  >
+                                    <span
+                                      className="flex w-14 shrink-0 flex-col items-center justify-center rounded-xl px-1 py-1.5 text-center text-white"
+                                      style={{
+                                        backgroundColor: conflict
+                                          ? '#e11d48'
+                                          : tone[1],
+                                      }}
+                                    >
+                                      <span className="text-[0.8rem] font-bold leading-tight">
+                                        {schedule.start === schedule.end
+                                          ? schedule.start
+                                          : `${schedule.start}-${schedule.end}`}
+                                      </span>
+                                      <span className="text-[0.6rem] opacity-80">
+                                        节
+                                      </span>
+                                    </span>
+                                    <span className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+                                      <strong className="text-[0.88rem] leading-5 text-slate-800">
+                                        {course.name}
+                                      </strong>
+                                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.72rem] leading-4 text-slate-500">
+                                        <span className="inline-flex items-center gap-1">
+                                          <MapPin className="size-3" />
+                                          {schedule.room || '教室待定'}
+                                        </span>
+                                        <span className="inline-flex items-center gap-1">
+                                          <Repeat2 className="size-3" />
+                                          {schedule.weeksText}
+                                        </span>
+                                      </span>
+                                    </span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+                      <CalendarDays className="size-6 text-slate-300" />
+                      <p className="text-sm font-medium text-slate-500">
+                        第 {week} 周没有已选课程上课
+                      </p>
+                      <p className="text-xs leading-5 text-slate-400">
+                        试试在上方「查看周次」切换到其他周，或回课程列表添加课程。
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
