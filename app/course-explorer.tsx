@@ -83,6 +83,8 @@ import {
 import EnrollmentNotice from '@/app/enrollment-notice';
 import { PROGRAM_PLANS } from '@/app/program-plans';
 
+// 智能选课建议开关：暂时下架（置 false 隐藏卡片，逻辑保留，恢复时改回 true）。
+const SHOW_SMART_SUGGESTIONS = false;
 const DEFAULT_TERM_ID = '2026-fall';
 const DEFAULT_TERM_LABEL = '2026—2027学年(秋)第一学期';
 // 当前学年后续学期（暂无数据，选到即显示"无课程数据"，可导入覆盖）
@@ -2261,9 +2263,10 @@ export default function CourseExplorer({
               </div>
             </div>
 
-            <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="font-bold">智能选课建议</h3>
+            {SHOW_SMART_SUGGESTIONS && (
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="font-bold">智能选课建议</h3>
                 <span className="text-xs text-slate-500">
                   已排除与当前已选冲突的班次，加入后列表自动更新
                 </span>
@@ -2329,7 +2332,8 @@ export default function CourseExplorer({
                     当前培养方向的学分要求已全部达成（含历史已修与本学期已选）。核心课 / 专业课门数要求请参考上方覆盖统计。
                   </div>
                 )}
-            </div>
+              </div>
+            )}
 
             <div className="selection-rules mt-4">
               <div className="rule-card">
