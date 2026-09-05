@@ -3553,6 +3553,29 @@ button {
     padding-inline: 0.7rem;
   }
 }
+/* 手机头部：学期切换整行独占，select 撑满容器，避免与“培养设置”重叠、箭头溢出 */
+@media (max-width: 700px) {
+  .header-context {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    justify-content: flex-start;
+    gap: 0.6rem;
+    margin-top: 0.35rem;
+  }
+  .header-context [data-slot='native-select-wrapper'] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .header-context [data-slot='native-select'] {
+    font-size: 0.8125rem;
+  }
+  .header-context > button {
+    flex: 0 0 auto;
+  }
+}
 @media print {
   .workspace-nav,
   .selection-sidebar,
