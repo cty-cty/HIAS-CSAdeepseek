@@ -1,7 +1,7 @@
 {
-  "name": "HIAS-CSAdeepseek 2026 秋季预选课助手",
-  "short_name": "HIAS-CSAdeepseek",
-  "description": "仅面向国科大杭州高等研究院 2026 级研一新生，支持课程筛选、培养方案核对、课表模拟、考试压力分析与冲突检测。",
+  "name": "HIAS-CSA 2026 秋季预选课助手",
+  "short_name": "HIAS-CSA",
+  "description": "仅面向国科大杭州高等研究院 2026 级研一新生，支持课程筛选、选课方案体检、学位课属性、培养方案核对、课表模拟与冲突检测。",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

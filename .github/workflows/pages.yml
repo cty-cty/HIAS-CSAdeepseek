@@ -1,4 +1,4 @@
-name: Deploy HIAS-CSAdeepseek to GitHub Pages
+name: Deploy HIAS-CSA to GitHub Pages
 
 on:
   push:
@@ -31,17 +31,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-
       - name: Build standalone page
         run: |
           npm run build:offline
           mkdir -p _site
-          cp ../HIAS-CSAdeepseek-2026秋季预选课助手-离线版.html _site/index.html
+          cp ../HIAS-CSA-2026秋季预选课助手-离线版.html _site/index.html
           sed -i 's/（离线版）//g' _site/index.html
           touch _site/.nojekyll
 

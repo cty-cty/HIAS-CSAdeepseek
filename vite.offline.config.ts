@@ -29,7 +29,7 @@ export default defineConfig({
       fileName: () => 'app.js',
       cssFileName: 'app',
     },
-    rolldownOptions: {
+    rollupOptions: {
       output: {
         inlineDynamicImports: true,
       },

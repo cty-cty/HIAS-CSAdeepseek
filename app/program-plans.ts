@@ -5,22 +5,21 @@ export type ProgramPlan = {
   program: string;
   code: string;
   totalCredits: number;
-  publicRequiredCredits: number;
+  publicRequiredCredits: number | null;
+  publicRequiredDegreeCredits?: number | null;
+  publicRequiredNonDegreeCredits?: number | null;
+  requiredPublicRequiredNonDegreeCourses?: string[];
   degreeCourseCredits: number;
   professionalNonDegreeCredits: number | null;
   publicElectiveCredits: number;
   innovationCredits: number | null;
-  /** 至少需“作为学位课”的核心课门数；null 表示该培养阶段不强制门数（如普博）。 */
-  coreMinimum: number | null;
-  /** 至少需“作为学位课”的专业课门数；null 表示该培养阶段不强制门数（如普博）。 */
-  professionalMinimum: number | null;
+  coreMinimum: number;
+  professionalMinimum: number;
   coreCourses: string[];
   professionalCourses: string[];
-  /** 方向性要求：核心课中至少 1 门须来自这些课程（如人工智能的《高级人工智能》/《自然语言处理》）。 */
-  coreFrom?: string[];
-  homeCollege?: string;
+  source?: string;
+  updatedAt?: string;
   note?: string;
-  publicRequiredNote?: string;
 };
 
 const PHYSICAL_ELECTRONICS_CORE = [
@@ -41,9 +40,6 @@ const PHYSICAL_ELECTRONICS_PROFESSIONAL = [
   '数字系统中的模拟电路技术',
 ];
 
-const PROFESSIONAL_PUBLIC_REQUIRED_NOTE =
-  '公共必修 8 学分组成：硕士学位英语 3 + 新时代中国特色社会主义理论与实践 2 + 学术道德与学术写作规范 1 + 自然辩证法概论 1 + 工程伦理 1（工程伦理为工程硕士必修）。其中《新时代中国特色社会主义理论与实践》《自然辩证法概论》须在一年级秋季学期修读；《学术道德与学术写作规范》按实际开课安排（秋/春）修读。硕士学位英语符合条件可申请免修免考（考研英语一≥70、英语二≥75、CET-6≥600 等，以通知为准）。';
-
 export const PROGRAM_PLANS: ProgramPlan[] = [
   {
     id: 'physical-master',
@@ -53,17 +49,17 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     code: '0809 电子科学与技术',
     totalCredits: 30,
     publicRequiredCredits: 7,
+    publicRequiredDegreeCredits: 7,
+    publicRequiredNonDegreeCredits: 0,
+    requiredPublicRequiredNonDegreeCourses: [],
     degreeCourseCredits: 12,
     professionalNonDegreeCredits: null,
     publicElectiveCredits: 2,
     innovationCredits: null,
     coreMinimum: 2,
     professionalMinimum: 2,
-    homeCollege: '物理与光电工程学院',
     coreCourses: PHYSICAL_ELECTRONICS_CORE,
     professionalCourses: PHYSICAL_ELECTRONICS_PROFESSIONAL,
-    publicRequiredNote:
-      '公共必修 7 学分组成：硕士学位英语 3 + 新时代中国特色社会主义理论与实践 2 + 学术道德与学术写作规范 1 + 自然辩证法概论 1。其中《新时代中国特色社会主义理论与实践》《自然辩证法概论》须在一年级秋季学期修读；《学术道德与学术写作规范》按实际开课安排（秋/春）修读。硕士学位英语符合条件可申请免修免考（考研英语一≥70、英语二≥75、CET-6≥600、雅思≥7 或托福≥100 等，以通知为准）。',
   },
   {
     id: 'optical-master',
@@ -73,13 +69,15 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     code: '085408 光电信息工程',
     totalCredits: 25,
     publicRequiredCredits: 8,
+    publicRequiredDegreeCredits: 7,
+    publicRequiredNonDegreeCredits: 1,
+    requiredPublicRequiredNonDegreeCourses: ['工程伦理'],
     degreeCourseCredits: 12,
     professionalNonDegreeCredits: 2,
     publicElectiveCredits: 2,
     innovationCredits: 1,
     coreMinimum: 2,
     professionalMinimum: 2,
-    homeCollege: '物理与光电工程学院',
     coreCourses: [
       '集成与微纳光子学',
       '高等光学原理',
@@ -101,7 +99,6 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
       '数字图像处理',
       '非线性光学导论',
     ],
-    publicRequiredNote: PROFESSIONAL_PUBLIC_REQUIRED_NOTE,
   },
   {
     id: 'ai-master',
@@ -111,24 +108,23 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     code: '085410 人工智能',
     totalCredits: 25,
     publicRequiredCredits: 8,
+    publicRequiredDegreeCredits: 7,
+    publicRequiredNonDegreeCredits: 1,
+    requiredPublicRequiredNonDegreeCourses: ['工程伦理'],
     degreeCourseCredits: 12,
     professionalNonDegreeCredits: 2,
     publicElectiveCredits: 2,
     innovationCredits: 1,
     coreMinimum: 2,
     professionalMinimum: 2,
-    homeCollege: '物理与光电工程学院',
     coreCourses: ['自然语言处理', '高级人工智能', '人工智能的数学基础与应用'],
-    // 人工智能方向：2 门核心课中至少 1 门来自以下两门（对应开学通知口径）。
-    coreFrom: ['高级人工智能', '自然语言处理'],
     professionalCourses: [
       '并行计算与实现技术',
       '计算机网络技术',
       '高级数据库系统',
       '智能物联网技术及应用',
     ],
-    note: '核心课程至少选2门（须设为学位课），其中至少1门须从《高级人工智能》《自然语言处理》中选择；专业课至少选2门（须设为学位课），不包括研讨课和实验课。',
-    publicRequiredNote: PROFESSIONAL_PUBLIC_REQUIRED_NOTE,
+    note: '核心课程至少选2门，其中至少1门须从《高级人工智能》《自然语言处理》中选择；专业课不包括研讨课和实验课。',
   },
   {
     id: 'materials-master',
@@ -138,13 +134,15 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     code: '085601 材料工程',
     totalCredits: 25,
     publicRequiredCredits: 8,
+    publicRequiredDegreeCredits: 7,
+    publicRequiredNonDegreeCredits: 1,
+    requiredPublicRequiredNonDegreeCourses: ['工程伦理'],
     degreeCourseCredits: 12,
     professionalNonDegreeCredits: 2,
     publicElectiveCredits: 2,
     innovationCredits: 1,
     coreMinimum: 2,
     professionalMinimum: 2,
-    homeCollege: '物理与光电工程学院',
     coreCourses: [
       '有机合成精细化工基础',
       '现代有机波谱分析与运用',
@@ -161,7 +159,6 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
       '半导体光子学（材料与化工）',
       '磁性材料',
     ],
-    publicRequiredNote: PROFESSIONAL_PUBLIC_REQUIRED_NOTE,
   },
   {
     id: 'physical-doctor',
@@ -171,20 +168,16 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     code: '0809 电子科学与技术',
     totalCredits: 38,
     publicRequiredCredits: 11,
+    publicRequiredDegreeCredits: 11,
+    publicRequiredNonDegreeCredits: 0,
+    requiredPublicRequiredNonDegreeCourses: [],
     degreeCourseCredits: 16,
     professionalNonDegreeCredits: null,
     publicElectiveCredits: 2,
     innovationCredits: null,
-    // 普通招考博士不套用“2 核心 + 2 专业”门数要求（学校一般要求为 ≥4 学分专业
-    // 学位课程且其中至少 1 门为硕博通用/博士专属核心课或专业课）；门数要求以个
-    // 人培养方案与学院审核为准，故置为 null 并在页面展示说明。
-    coreMinimum: null,
-    professionalMinimum: null,
-    homeCollege: '物理与光电工程学院',
+    coreMinimum: 2,
+    professionalMinimum: 2,
     coreCourses: PHYSICAL_ELECTRONICS_CORE,
     professionalCourses: PHYSICAL_ELECTRONICS_PROFESSIONAL,
-    note: '博士核心课及专业课具体要求请以个人培养方案及学院审核为准。普通招考博士一般要求至少修读 4 学分专业学位课程，其中至少 1 门为硕博通用或博士专属的核心课/专业课并作为学位课；硕博连读/直博另按学校规定执行。',
-    publicRequiredNote:
-      '公共必修 11 学分组成：学硕 7 分（硕士英语 3 + 新中特 2 + 学术道德 1 + 自然辩证法 1）+ 中国马克思主义与当代 2 + 博士学位英语 2（《中国马克思主义与当代》《博士学位英语》按学校口径计入培养方案要求学分）。',
   },
 ];
