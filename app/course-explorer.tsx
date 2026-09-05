@@ -883,6 +883,15 @@ export default function CourseExplorer({
     const timer = window.setTimeout(() => setSelectionMessage(''), 3000);
     return () => window.clearTimeout(timer);
   }, [selectionMessage]);
+  // 移动端：切换视图后把当前激活的顶部 Tab 横向滚入可视区
+  useEffect(() => {
+    const active = document.querySelector<HTMLElement>(
+      '.workspace-tab[data-active]',
+    );
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [view]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isInitialSetup, setIsInitialSetup] = useState(false);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
@@ -4375,7 +4384,7 @@ export default function CourseExplorer({
 
       <Dialog open={timetableOpen} onOpenChange={setTimetableOpen}>
         <DialogContent
-          className="w-[min(94vw,1520px)] max-w-none sm:max-w-none max-h-[90vh] overflow-y-auto"
+          className="flex min-w-0 flex-col w-[min(94vw,1520px)] max-w-none sm:max-w-none max-h-[90vh] overflow-y-auto"
         >
           <DialogHeader>
             <DialogTitle>我的模拟课程表</DialogTitle>
@@ -4412,7 +4421,7 @@ export default function CourseExplorer({
           </div>
 
           {selectedCourses.length ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="min-w-0 w-full rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
               {currentWeekConflicts.size > 0 && (
                 <div className="mb-3 flex items-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
                   <Zap className="size-4" /> 本周有{' '}
@@ -4420,7 +4429,7 @@ export default function CourseExplorer({
                   门课程时间重叠，已用红色标出。
                 </div>
               )}
-              <div className="overflow-x-auto pb-2">
+              <div className="w-full min-w-0 overflow-x-auto pb-2">
                 <div className="timetable-grid">
                   <div className="timetable-corner">节次</div>
                   {DAYS.map((label, index) => (
