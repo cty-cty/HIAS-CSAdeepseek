@@ -2859,14 +2859,33 @@ button {
   color: #6b7a90;
 }
 .catalog-grid .course-extra {
-  gap: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 1.1rem;
+  row-gap: 0.35rem;
   margin-top: 0.8rem;
+  font-size: 0.875rem;
+  color: #4b5a6c;
 }
 .catalog-grid .course-extra span {
-  padding: 0.2rem 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  color: #63748a;
-  font-size: 0.8125rem;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.catalog-grid .course-extra svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  color: #7a8aa0;
 }
 .course-time-block {
   margin-block: 0.8rem 1rem;
@@ -3228,6 +3247,33 @@ button {
   box-shadow: 0 8px 28px #172e4929;
   color: white;
   font-size: 0.875rem;
+  will-change: transform, opacity;
+  /* 入场上浮 + 出场回落动效；退出动画在 ~2.74s 启动，与 3s 自动关闭衔接 */
+  animation:
+    selection-toast-in 240ms cubic-bezier(0.18, 0.9, 0.32, 1.1) both,
+    selection-toast-out 260ms ease-in 2.74s forwards;
+}
+
+@keyframes selection-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes selection-toast-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.97);
+  }
 }
 .selection-toast > span {
   min-width: 0;

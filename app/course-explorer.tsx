@@ -228,14 +228,6 @@ type NoticeSection = {
   items: Array<{ label: string; detail: string }>;
 };
 
-type CheckupItem = {
-  id: string;
-  title: string;
-  value: string;
-  detail: string;
-  status: 'pass' | 'attention' | 'info';
-};
-
 type WebMcpContext = {
   registerTool: (
     tool: {
@@ -817,20 +809,28 @@ function parseCourseDataset(text: string, fileName: string): CourseDataset {
 function ScheduleLines({ schedules }: { schedules: Schedule[] }) {
   return (
     <div className="space-y-1.5">
-      {schedules.map((schedule, index) => (
-        <div
-          className="flex flex-wrap items-center gap-x-2 gap-y-1"
-          key={`${schedule.periodText}-${index}`}
-        >
-          <span className="font-medium text-slate-800">
-            {schedule.periodText}
-          </span>
-          <span className="text-slate-500">{schedule.weeksText}</span>
-          <span className="inline-flex items-center gap-1 text-slate-500">
-            <MapPin className="size-3.5" /> {schedule.room}
-          </span>
-        </div>
-      ))}
+      {schedules.map((schedule, index) => {
+        const dayLabel = schedule.day || '';
+        // periodText 形如“周四(3-4)”，把开头的周几拆出来单独强调
+        const periodSuffix = schedule.periodText.startsWith(dayLabel)
+          ? schedule.periodText.slice(dayLabel.length)
+          : schedule.periodText;
+        return (
+          <div
+            className="flex flex-wrap items-center gap-x-2 gap-y-1"
+            key={`${schedule.periodText}-${index}`}
+          >
+            <span className="font-semibold text-slate-900">{dayLabel}</span>
+            {periodSuffix && (
+              <span className="text-slate-600">{periodSuffix}</span>
+            )}
+            <span className="text-slate-500">{schedule.weeksText}</span>
+            <span className="inline-flex items-center gap-1 text-slate-500">
+              <MapPin className="size-3.5" /> {schedule.room}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -859,8 +859,9 @@ export default function CourseExplorer({
   const [onlySelected, setOnlySelected] = useState(false);
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
   const [view, setViewState] = useState<
-    'courses' | 'checkup' | 'guide' | 'notice' | 'exams' | 'timetable' | 'data'
+    'courses' | 'guide' | 'notice' | 'exams' | 'data'
   >('courses');
+  const [timetableOpen, setTimetableOpen] = useState(false);
   const [customProgramPlans, setCustomProgramPlans] = useState<ProgramPlan[]>(
     [],
   );
@@ -876,6 +877,12 @@ export default function CourseExplorer({
   const [englishExemptionStatus, setEnglishExemptionStatus] =
     useState<ExemptionStatus>('normal');
   const [selectionMessage, setSelectionMessage] = useState('');
+  // 选课操作提示（加入/移除/替换/清空等）3 秒后自动消失
+  useEffect(() => {
+    if (!selectionMessage) return;
+    const timer = window.setTimeout(() => setSelectionMessage(''), 3000);
+    return () => window.clearTimeout(timer);
+  }, [selectionMessage]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isInitialSetup, setIsInitialSetup] = useState(false);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
@@ -1677,12 +1684,6 @@ export default function CourseExplorer({
     semesterMinimumTarget === null
       ? 0
       : Math.max(0, semesterMinimumTarget - semesterEligibleCredits);
-  const selectedPublicRequiredDegreeCredits =
-    creditSummary.publicRequiredDegreeCredits;
-  const selectedPublicRequiredNonDegreeCredits =
-    creditSummary.publicRequiredNonDegreeCredits;
-  const selectedPublicElectiveCredits = creditSummary.publicElectiveCredits;
-  const selectedInnovationCredits = creditSummary.innovationCredits;
   const selectedSportsCourses = countedSelectedCourses.filter(
     (course) => course.subject === '体育学',
   );
@@ -1692,151 +1693,12 @@ export default function CourseExplorer({
     (course) =>
       getCourseDesignation(course, activeDesignations, activePlan) === 'unset',
   ).length;
-  const invalidDegreeCourses = selectedCourses.filter(
-    (course) =>
-      activeDesignations[course.code] === 'degree' &&
-      getCourseRoleEligibility(course, activePlan).status === 'ineligible',
-  );
   const publicElectiveTarget =
     activePlan.publicElectiveCredits + (activePlan.innovationCredits ?? 0);
   const publicRequiredDegreeTarget =
     activePlan.publicRequiredDegreeCredits ?? null;
   const publicRequiredNonDegreeTarget =
     activePlan.publicRequiredNonDegreeCredits ?? null;
-  const checkupItems: CheckupItem[] = [
-    {
-      id: 'credits',
-      title: '学期有效学分',
-      value:
-        semesterMinimumTarget === null
-          ? `${formatCredits(semesterEligibleCredits)} 学分`
-          : `${formatCredits(semesterEligibleCredits)} / ${semesterMinimumTarget} 学分`,
-      detail:
-        semesterMinimumTarget === null
-          ? '当前学期未设置自动门槛，请以对应学期通知为准。'
-          : 'HIAS 讲堂、科学前沿讲座和人文系列讲座不计入该门槛。',
-      status:
-        semesterMinimumTarget === null
-          ? 'info'
-          : semesterEligibleCredits >= semesterMinimumTarget
-            ? 'pass'
-            : 'attention',
-    },
-    {
-      id: 'conflicts',
-      title: '课程时间冲突',
-      value: conflictPairs.length ? `${conflictPairs.length} 组冲突` : '无冲突',
-      detail: conflictPairs.length
-        ? '请返回课程列表查看冲突课程和可替代班次。'
-        : '当前已选课程的星期、节次和教学周没有重叠。',
-      status: conflictPairs.length ? 'attention' : 'pass',
-    },
-    {
-      id: 'designation',
-      title: '学位课属性',
-      value: unsetDesignationCount
-        ? `${unsetDesignationCount} 门未确定`
-        : '全部已设置',
-      detail: invalidDegreeCourses.length
-        ? `${invalidDegreeCourses.map((course) => course.name).join('、')}只能作为非学位课。`
-        : '请在下方逐门确认学位课或非学位课属性。',
-      status:
-        unsetDesignationCount || invalidDegreeCourses.length
-          ? 'attention'
-          : 'pass',
-    },
-    {
-      id: 'core',
-      title: '核心课作为学位课',
-      value: `${selectedDegreeCoreCount} / ${activePlan.coreMinimum} 门`,
-      detail: '这是培养阶段要求，不代表必须在当前学期一次完成。',
-      status:
-        selectedDegreeCoreCount >= activePlan.coreMinimum ? 'pass' : 'info',
-    },
-    {
-      id: 'professional',
-      title: '专业课作为学位课',
-      value: `${selectedDegreeProfessionalCount} / ${activePlan.professionalMinimum} 门`,
-      detail: '仅统计当前培养方向课程库中已标记为学位课的课程。',
-      status:
-        selectedDegreeProfessionalCount >= activePlan.professionalMinimum
-          ? 'pass'
-          : 'info',
-    },
-    {
-      id: 'public-required-degree',
-      title: '公共必修学位课',
-      value:
-        publicRequiredDegreeTarget === null
-          ? `${formatCredits(selectedPublicRequiredDegreeCredits)} 学分`
-          : `${formatCredits(selectedPublicRequiredDegreeCredits)} / ${publicRequiredDegreeTarget} 学分`,
-      detail: '公共必修学位课与专业学位课分开统计；英语免修仍按免修状态处理。',
-      status:
-        publicRequiredDegreeTarget === null
-          ? 'info'
-          : selectedPublicRequiredDegreeCredits >= publicRequiredDegreeTarget
-            ? 'pass'
-            : 'info',
-    },
-    {
-      id: 'public-required-non-degree',
-      title: '公共必修非学位课',
-      value:
-        publicRequiredNonDegreeTarget === null
-          ? `${formatCredits(selectedPublicRequiredNonDegreeCredits)} 学分`
-          : `${formatCredits(selectedPublicRequiredNonDegreeCredits)} / ${publicRequiredNonDegreeTarget} 学分`,
-      detail: '工程硕士必须修读《工程伦理》，但该课程不计入任何学位课学分。',
-      status:
-        publicRequiredNonDegreeTarget === null
-          ? 'info'
-          : selectedPublicRequiredNonDegreeCredits >=
-              publicRequiredNonDegreeTarget
-            ? 'pass'
-            : 'info',
-    },
-    {
-      id: 'public-elective',
-      title: '公共选修课',
-      value: `${formatCredits(selectedPublicElectiveCredits)} / ${formatCredits(publicElectiveTarget)} 学分`,
-      detail:
-        activePlan.innovationCredits === null
-          ? '按当前培养方向的公共选修课要求统计。'
-          : `公共选修合计要求包含 ${formatCredits(activePlan.innovationCredits)} 学分创新创业模块，实际学分只累计一次。`,
-      status:
-        selectedPublicElectiveCredits >= publicElectiveTarget ? 'pass' : 'info',
-    },
-    ...(activePlan.innovationCredits === null
-      ? []
-      : [
-          {
-            id: 'innovation',
-            title: '创新创业模块',
-            value: `${formatCredits(selectedInnovationCredits)} / ${formatCredits(activePlan.innovationCredits)} 学分`,
-            detail: '按照选课须知中的创新创业模块课程名单识别。',
-            status:
-              selectedInnovationCredits >= activePlan.innovationCredits
-                ? ('pass' as const)
-                : ('info' as const),
-          },
-        ]),
-    {
-      id: 'sports',
-      title: '体育类公共选修课',
-      value: `${selectedSportsCourses.length} / 1 门`,
-      detail:
-        selectedSportsCourses.length > 1
-          ? `已选择：${selectedSportsCourses.map((course) => course.name).join('、')}。`
-          : '选课须知规定体育类公共选修课每学期限选 1 门。',
-      status: selectedSportsCourses.length <= 1 ? 'pass' : 'attention',
-    },
-  ];
-  const passedCheckCount = checkupItems.filter(
-    (item) => item.status === 'pass',
-  ).length;
-  const attentionCheckCount = checkupItems.filter(
-    (item) => item.status === 'attention',
-  ).length;
-
   const conflictPeers = useMemo(() => {
     const peers = new Map<string, Course[]>();
     conflictPairs.forEach(({ left, right }) => {
@@ -2567,8 +2429,6 @@ export default function CourseExplorer({
   ];
   const navigation = [
     { value: 'courses', label: '选课程', icon: BookOpen },
-    { value: 'timetable', label: '我的课表', icon: CalendarDays },
-    { value: 'checkup', label: '选课体检', icon: ShieldCheck },
     { value: 'guide', label: '培养要求', icon: GraduationCap },
     { value: 'exams', label: '考试压力', icon: BarChart3 },
     { value: 'notice', label: '选课须知', icon: Info },
@@ -2660,9 +2520,6 @@ export default function CourseExplorer({
                 >
                   <Icon />
                   {label}
-                  {value === 'checkup' && conflictPairs.length > 0 && (
-                    <b>{conflictPairs.length}</b>
-                  )}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -2962,7 +2819,7 @@ export default function CourseExplorer({
                     <div className="selected-toolbar">
                       <Button
                         variant="outline"
-                        onClick={() => setView('timetable')}
+                        onClick={() => setTimetableOpen(true)}
                       >
                         <CalendarDays />
                         查看课表
@@ -3173,223 +3030,6 @@ export default function CourseExplorer({
                       </Button>
                     </div>
                   )}
-                </section>
-              ) : view === 'checkup' ? (
-                <section className="py-6">
-                  <div className="section-heading mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                    <div>
-                      <p>SELECTION CHECKUP</p>
-                      <h2>选课方案体检</h2>
-                      <div className="section-description">
-                        结合当前培养方向和选课须知检查已选课程。结果仅用于发现明显遗漏，不能替代导师、学院和教务系统审核。
-                      </div>
-                    </div>
-                    <label
-                      className="min-w-64 text-sm font-medium text-slate-600"
-                      htmlFor="checkup-plan"
-                    >
-                      当前培养方向
-                      <NativeSelect
-                        aria-label="选择体检培养方向"
-                        className="mt-2 w-full [&>select]:h-11"
-                        id="checkup-plan"
-                        onChange={(event) =>
-                          setProgramPlanId(event.target.value)
-                        }
-                        value={programPlanId}
-                      >
-                        {availableProgramPlans.map((plan) => (
-                          <NativeSelectOption key={plan.id} value={plan.id}>
-                            {plan.label}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </label>
-                  </div>
-
-                  <div
-                    className="checkup-summary"
-                    data-status={
-                      !selectedCourses.length
-                        ? 'empty'
-                        : attentionCheckCount
-                          ? 'attention'
-                          : 'pass'
-                    }
-                  >
-                    <div className="checkup-summary-icon">
-                      {!selectedCourses.length || !attentionCheckCount ? (
-                        <ShieldCheck />
-                      ) : (
-                        <TriangleAlert />
-                      )}
-                      <div className="hero-summary-grid mt-4">
-                        <span>
-                          <b>{conflictPairs.length}</b> 冲突
-                        </span>
-                        <span>
-                          <b>{unsetDesignationCount}</b> 待确认
-                        </span>
-                        <span>
-                          <b>
-                            {formatCredits(creditSummary.historicalCredits)}
-                          </b>{' '}
-                          已修
-                        </span>
-                        <span>
-                          <b>{formatCredits(creditSummary.estimatedCredits)}</b>{' '}
-                          预计累计
-                        </span>
-                      </div>
-                    </div>
-                    <div>
-                      <span>{activePlan.label}</span>
-                      <strong>
-                        {!selectedCourses.length
-                          ? '选择课程后开始体检'
-                          : attentionCheckCount
-                            ? `有 ${attentionCheckCount} 项需要处理`
-                            : '当前方案未发现明显问题'}
-                      </strong>
-                      <p>
-                        {!selectedCourses.length
-                          ? '体检结果会随已选课程和学位课属性实时更新。'
-                          : `已满足 ${passedCheckCount} / ${checkupItems.length} 项；标记为“需核对”的培养阶段要求不计为硬性错误。`}
-                      </p>
-                    </div>
-                    <div className="checkup-summary-credit">
-                      <b>{formatCredits(semesterEligibleCredits)}</b>
-                      <span>有效学分</span>
-                    </div>
-                  </div>
-
-                  <div className="checkup-grid mt-5">
-                    {checkupItems.map((item) => (
-                      <article
-                        className="checkup-card"
-                        data-status={item.status}
-                        key={item.id}
-                      >
-                        <div className="checkup-card-icon">
-                          {item.status === 'pass' ? (
-                            <CheckCircle2 />
-                          ) : item.status === 'attention' ? (
-                            <TriangleAlert />
-                          ) : (
-                            <Info />
-                          )}
-                        </div>
-                        <div>
-                          <span>
-                            {item.status === 'pass'
-                              ? '已满足'
-                              : item.status === 'attention'
-                                ? '需要处理'
-                                : '需核对'}
-                          </span>
-                          <h3>{item.title}</h3>
-                          <strong>{item.value}</strong>
-                          <p>{item.detail}</p>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-
-                  <div className="designation-panel mt-5">
-                    <div className="designation-panel-head">
-                      <div>
-                        <p>COURSE DESIGNATION</p>
-                        <h3>设置学位课属性</h3>
-                        <span>
-                          该设置仅保存在当前浏览器，正式选课时仍需在选课系统中再次确认。
-                        </span>
-                      </div>
-                      <Badge variant="secondary">
-                        {selectedCourses.length - unsetDesignationCount} /{' '}
-                        {selectedCourses.length} 门已设置
-                      </Badge>
-                    </div>
-
-                    {selectedCourses.length ? (
-                      <div className="designation-list">
-                        {selectedCourses.map((course) => {
-                          const designation = courseDesignation(course);
-                          const degreeEligibility = getCourseRoleEligibility(
-                            course,
-                            activePlan,
-                          );
-                          const degreeSelectable =
-                            degreeEligibility.status !== 'ineligible';
-                          return (
-                            <div className="designation-row" key={course.id}>
-                              <button
-                                onClick={() => setDetailCourse(course)}
-                                type="button"
-                              >
-                                <strong>{course.name}</strong>
-                                <span>
-                                  {course.category} ·{' '}
-                                  {formatCredits(course.credits)} 学分 ·{' '}
-                                  {getCourseRequirementTypeLabel(
-                                    courseRequirementType(course),
-                                  )}
-                                  {isInnovationCourse(course)
-                                    ? ' · 创新创业课'
-                                    : ''}
-                                </span>
-                              </button>
-                              <div className="designation-control">
-                                <NativeSelect
-                                  aria-label={`设置${course.name}的学位课属性`}
-                                  className="w-full min-w-36 [&>select]:h-10"
-                                  onChange={(event) =>
-                                    setCourseDesignation(
-                                      course,
-                                      event.target.value as CourseDesignation,
-                                    )
-                                  }
-                                  value={designation}
-                                >
-                                  <NativeSelectOption
-                                    disabled={!degreeSelectable}
-                                    value="unset"
-                                  >
-                                    未确定
-                                  </NativeSelectOption>
-                                  <NativeSelectOption
-                                    disabled={!degreeSelectable}
-                                    value="degree"
-                                  >
-                                    学位课
-                                  </NativeSelectOption>
-                                  <NativeSelectOption value="non-degree">
-                                    非学位课
-                                  </NativeSelectOption>
-                                </NativeSelect>
-                                {degreeEligibility.status !== 'eligible' && (
-                                  <small>{degreeEligibility.reason}</small>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="designation-empty">
-                        <ClipboardList />
-                        <div>
-                          <strong>还没有已选课程</strong>
-                          <span>先从课程列表选择课程，再回来设置属性。</span>
-                        </div>
-                        <Button
-                          onClick={() => setView('courses')}
-                          variant="outline"
-                        >
-                          去选择课程
-                        </Button>
-                      </div>
-                    )}
-                  </div>
                 </section>
               ) : view === 'data' ? (
                 <section className="py-6">
@@ -3828,31 +3468,31 @@ export default function CourseExplorer({
                   >
                     <div className="designation-panel-head">
                       <div>
-                        <h3>确认已选课程的学位属性</h3>
+                        <p>COURSE DESIGNATION</p>
+                        <h3>设置学位课属性</h3>
                         <span>
-                          这是个人规划口径，不代表学校审核认定；待确认课程不会被当成完全缺课。
+                          在下方把每门已选课程标记为学位课 / 非学位课 /
+                          未确定；研讨课、实验课等按规则只能作为非学位课。该设置仅保存在当前浏览器，正式选课时仍需在选课系统中再次确认。
                         </span>
                       </div>
                       <Badge variant="secondary">
-                        {unsetDesignationCount} 门待确认
+                        {selectedCourses.length - unsetDesignationCount} /{' '}
+                        {selectedCourses.length} 门已设置
                       </Badge>
                     </div>
-                    {unsetDesignationCount ? (
+
+                    {selectedCourses.length ? (
                       <div className="designation-list">
-                        {countedSelectedCourses
-                          .filter(
-                            (course) =>
-                              getCourseDesignation(
-                                course,
-                                activeDesignations,
-                                activePlan,
-                              ) === 'unset',
-                          )
-                          .map((course) => (
-                            <div
-                              className="designation-row"
-                              key={`pending-${course.id}`}
-                            >
+                        {selectedCourses.map((course) => {
+                          const designation = courseDesignation(course);
+                          const degreeEligibility = getCourseRoleEligibility(
+                            course,
+                            activePlan,
+                          );
+                          const degreeSelectable =
+                            degreeEligibility.status !== 'ineligible';
+                          return (
+                            <div className="designation-row" key={course.id}>
                               <button
                                 onClick={() => setDetailCourse(course)}
                                 type="button"
@@ -3861,61 +3501,64 @@ export default function CourseExplorer({
                                 <span>
                                   {course.category} ·{' '}
                                   {formatCredits(course.credits)} 学分 ·{' '}
-                                  {course.code}
+                                  {getCourseRequirementTypeLabel(
+                                    courseRequirementType(course),
+                                  )}
+                                  {isInnovationCourse(course)
+                                    ? ' · 创新创业课'
+                                    : ''}
                                 </span>
                               </button>
-                              <div
-                                className="designation-radio-group"
-                                role="radiogroup"
-                                aria-label={`设置${course.name}的学位课属性`}
-                              >
-                                <label>
-                                  <input
-                                    checked={false}
-                                    disabled={
-                                      getCourseRoleEligibility(
-                                        course,
-                                        activePlan,
-                                      ).status === 'ineligible'
-                                    }
-                                    name={`pending-${course.id}`}
-                                    onChange={() =>
-                                      setCourseDesignation(course, 'degree')
-                                    }
-                                    type="radio"
-                                  />{' '}
-                                  学位课
-                                </label>
-                                <label>
-                                  <input
-                                    checked={false}
-                                    name={`pending-${course.id}`}
-                                    onChange={() =>
-                                      setCourseDesignation(course, 'non-degree')
-                                    }
-                                    type="radio"
-                                  />{' '}
-                                  非学位课
-                                </label>
-                                {getCourseRoleEligibility(course, activePlan)
-                                  .status !== 'eligible' && (
-                                  <small>
-                                    {
-                                      getCourseRoleEligibility(
-                                        course,
-                                        activePlan,
-                                      ).reason
-                                    }
-                                  </small>
+                              <div className="designation-control">
+                                <NativeSelect
+                                  aria-label={`设置${course.name}的学位课属性`}
+                                  className="w-full min-w-36 [&>select]:h-10"
+                                  onChange={(event) =>
+                                    setCourseDesignation(
+                                      course,
+                                      event.target.value as CourseDesignation,
+                                    )
+                                  }
+                                  value={designation}
+                                >
+                                  <NativeSelectOption
+                                    disabled={!degreeSelectable}
+                                    value="unset"
+                                  >
+                                    未确定
+                                  </NativeSelectOption>
+                                  <NativeSelectOption
+                                    disabled={!degreeSelectable}
+                                    value="degree"
+                                  >
+                                    学位课
+                                  </NativeSelectOption>
+                                  <NativeSelectOption value="non-degree">
+                                    非学位课
+                                  </NativeSelectOption>
+                                </NativeSelect>
+                                {degreeEligibility.status !== 'eligible' && (
+                                  <small>{degreeEligibility.reason}</small>
                                 )}
                               </div>
                             </div>
-                          ))}
+                          );
+                        })}
                       </div>
                     ) : (
-                      <p className="designation-empty-note">
-                        没有需要先确认的已选课程。已确认属性的课程仍可在“选课体检”中调整。
-                      </p>
+                      <div className="designation-empty">
+                        <ClipboardList />
+                        <div>
+                          <strong>还没有已选课程</strong>
+                          <span>先从课程列表选择课程，再回来设置学位课属性。</span>
+                        </div>
+                        <Button
+                          onClick={() => setView('courses')}
+                          variant="outline"
+                        >
+                          去选择课程
+                        </Button>
+                      </div>
                     )}
                   </div>
 
@@ -4322,139 +3965,8 @@ export default function CourseExplorer({
                     </span>
                   </div>
                 </section>
-              ) : (
-                <section className="py-6">
-                  <div className="section-heading mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <p>WEEKLY TIMETABLE</p>
-                      <h2>我的模拟课程表</h2>
-                      <div className="section-description">
-                        共 {selectedCourses.length} 门课程 · 方案合计{' '}
-                        {formatCredits(selectedCredits)} 学分
-                        {englishQualificationCredits > 0 &&
-                          `（含英语免修免考 ${formatCredits(englishQualificationCredits)} 学分）`}
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
-                      查看周次
-                      <NativeSelect
-                        aria-label="查看周次"
-                        className="min-w-28 [&>select]:h-10"
-                        onChange={(event) =>
-                          setWeek(Number(event.target.value))
-                        }
-                        value={week}
-                      >
-                        {Array.from(
-                          { length: 20 },
-                          (_, index) => index + 1,
-                        ).map((value) => (
-                          <NativeSelectOption key={value} value={value}>
-                            第 {value} 周
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </label>
-                  </div>
-
-                  {selectedCourses.length ? (
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-                      {currentWeekConflicts.size > 0 && (
-                        <div className="mb-3 flex items-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                          <Zap className="size-4" /> 本周有{' '}
-                          {currentWeekConflicts.size}{' '}
-                          门课程时间重叠，已用红色标出。
-                        </div>
-                      )}
-                      <div className="overflow-x-auto pb-2">
-                        <div className="timetable-grid">
-                          <div className="timetable-corner">节次</div>
-                          {DAYS.map((label, index) => (
-                            <div
-                              className="timetable-day"
-                              key={label}
-                              style={{ gridColumn: index + 2, gridRow: 1 }}
-                            >
-                              {label}
-                            </div>
-                          ))}
-                          {Array.from(
-                            { length: 13 },
-                            (_, index) => index + 1,
-                          ).map((period) => (
-                            <div
-                              className="timetable-period"
-                              key={period}
-                              style={{ gridColumn: 1, gridRow: period + 1 }}
-                            >
-                              <strong>{period}</strong>
-                              <span>第 {period} 节</span>
-                            </div>
-                          ))}
-                          {DAYS.flatMap((_, dayIndex) =>
-                            Array.from(
-                              { length: 13 },
-                              (_, index) => index + 1,
-                            ).map((period) => (
-                              <div
-                                className="timetable-cell"
-                                key={`${dayIndex}-${period}`}
-                                style={{
-                                  gridColumn: dayIndex + 2,
-                                  gridRow: period + 1,
-                                }}
-                              />
-                            )),
-                          )}
-                          {selectedCourses.flatMap((course) =>
-                            course.schedules
-                              .filter((schedule) =>
-                                schedule.weeks.includes(week),
-                              )
-                              .map((schedule, scheduleIndex) => {
-                                const color = courseColor(course.id);
-                                const conflict = currentWeekConflicts.has(
-                                  course.id,
-                                );
-                                return (
-                                  <button
-                                    className={`timetable-course ${conflict ? 'timetable-course-conflict' : ''}`}
-                                    key={`${course.id}-${scheduleIndex}`}
-                                    onClick={() => setDetailCourse(course)}
-                                    style={{
-                                      gridColumn: schedule.dayIndex + 2,
-                                      gridRow: `${schedule.start + 1} / ${schedule.end + 2}`,
-                                      backgroundColor: conflict
-                                        ? '#ffe4e6'
-                                        : color[0],
-                                      borderColor: conflict
-                                        ? '#e11d48'
-                                        : color[1],
-                                      color: conflict ? '#9f1239' : color[1],
-                                    }}
-                                    type="button"
-                                  >
-                                    <strong>{course.name}</strong>
-                                    <span>{schedule.room}</span>
-                                  </button>
-                                );
-                              }),
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="empty-state">
-                      <CalendarDays />
-                      <h3>课表还是空的</h3>
-                      <p>回到课程列表，点击课程卡片右上角的星标即可加入。</p>
-                      <Button onClick={() => setView('courses')}>
-                        去选择课程
-                      </Button>
-                    </div>
-                  )}
-                </section>
-              )}
+              ) : null
+              }
             </TabsContent>
             {view === 'courses' && (
               <aside className="selection-sidebar" aria-label="本学期选课方案">
@@ -4483,24 +3995,6 @@ export default function CourseExplorer({
                     {formatCredits(englishQualificationCredits)} 学分
                   </p>
                 )}
-                <button
-                  type="button"
-                  className={
-                    'selection-health ' +
-                    (conflictPairs.length ? 'has-conflict' : '')
-                  }
-                  onClick={() => setView('checkup')}
-                >
-                  {conflictPairs.length ? <TriangleAlert /> : <ShieldCheck />}
-                  <span>
-                    {conflictPairs.length
-                      ? conflictPairs.length + ' 组时间冲突待处理'
-                      : selectedCourses.length
-                        ? '暂无时间冲突 · 查看体检'
-                        : '选课后自动检查时间冲突'}
-                  </span>
-                  <ArrowRight />
-                </button>
                 <button
                   type="button"
                   className="plan-context-link"
@@ -4593,7 +4087,7 @@ export default function CourseExplorer({
                   </div>
                 )}
                 <div className="selection-actions">
-                  <Button onClick={() => setView('timetable')}>
+                  <Button onClick={() => setTimetableOpen(true)}>
                     <CalendarDays />
                     查看我的课表
                   </Button>
@@ -4667,7 +4161,7 @@ export default function CourseExplorer({
             <strong>{formatCredits(selectedCredits)} 学分</strong>
           </span>
         </button>
-        <Button onClick={() => setView('timetable')}>
+        <Button onClick={() => setTimetableOpen(true)}>
           <CalendarDays />
           课表
         </Button>
@@ -4681,7 +4175,7 @@ export default function CourseExplorer({
         </Button>
       </div>
       {selectionMessage && (
-        <div className="selection-toast">
+        <div className="selection-toast" key={selectionMessage}>
           <output>{selectionMessage}</output>
           {undoSelection && undoSelection.termId === activeTermId && (
             <button type="button" onClick={undoLastSelection}>
@@ -4876,6 +4370,148 @@ export default function CourseExplorer({
               稍后查看
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={timetableOpen} onOpenChange={setTimetableOpen}>
+        <DialogContent
+          className="w-[min(94vw,1520px)] max-w-none sm:max-w-none max-h-[90vh] overflow-y-auto"
+        >
+          <DialogHeader>
+            <DialogTitle>我的模拟课程表</DialogTitle>
+            <DialogDescription>
+              共 {selectedCourses.length} 门课程 · 方案合计{' '}
+              {formatCredits(selectedCredits)} 学分
+              {englishQualificationCredits > 0 &&
+                `（含英语免修免考 ${formatCredits(englishQualificationCredits)} 学分）`}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs leading-5 text-slate-500">
+              桌面端横向滚动可查看完整一周；点击课程块可查看课程详情。
+            </p>
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+              查看周次
+              <NativeSelect
+                aria-label="查看周次"
+                className="min-w-28 [&>select]:h-10"
+                onChange={(event) => setWeek(Number(event.target.value))}
+                value={week}
+              >
+                {Array.from(
+                  { length: 20 },
+                  (_, index) => index + 1,
+                ).map((value) => (
+                  <NativeSelectOption key={value} value={value}>
+                    第 {value} 周
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+          </div>
+
+          {selectedCourses.length ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              {currentWeekConflicts.size > 0 && (
+                <div className="mb-3 flex items-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  <Zap className="size-4" /> 本周有{' '}
+                  {currentWeekConflicts.size}{' '}
+                  门课程时间重叠，已用红色标出。
+                </div>
+              )}
+              <div className="overflow-x-auto pb-2">
+                <div className="timetable-grid">
+                  <div className="timetable-corner">节次</div>
+                  {DAYS.map((label, index) => (
+                    <div
+                      className="timetable-day"
+                      key={label}
+                      style={{ gridColumn: index + 2, gridRow: 1 }}
+                    >
+                      {label}
+                    </div>
+                  ))}
+                  {Array.from(
+                    { length: 13 },
+                    (_, index) => index + 1,
+                  ).map((period) => (
+                    <div
+                      className="timetable-period"
+                      key={period}
+                      style={{ gridColumn: 1, gridRow: period + 1 }}
+                    >
+                      <strong>{period}</strong>
+                      <span>第 {period} 节</span>
+                    </div>
+                  ))}
+                  {DAYS.flatMap((_, dayIndex) =>
+                    Array.from(
+                      { length: 13 },
+                      (_, index) => index + 1,
+                    ).map((period) => (
+                      <div
+                        className="timetable-cell"
+                        key={`${dayIndex}-${period}`}
+                        style={{
+                          gridColumn: dayIndex + 2,
+                          gridRow: period + 1,
+                        }}
+                      />
+                    )),
+                  )}
+                  {selectedCourses.flatMap((course) =>
+                    course.schedules
+                      .filter((schedule) =>
+                        schedule.weeks.includes(week),
+                      )
+                      .map((schedule, scheduleIndex) => {
+                        const color = courseColor(course.id);
+                        const conflict = currentWeekConflicts.has(
+                          course.id,
+                        );
+                        return (
+                          <button
+                            className={`timetable-course ${conflict ? 'timetable-course-conflict' : ''}`}
+                            key={`${course.id}-${scheduleIndex}`}
+                            onClick={() => setDetailCourse(course)}
+                            style={{
+                              gridColumn: schedule.dayIndex + 2,
+                              gridRow: `${schedule.start + 1} / ${schedule.end + 2}`,
+                              backgroundColor: conflict
+                                ? '#ffe4e6'
+                                : color[0],
+                              borderColor: conflict
+                                ? '#e11d48'
+                                : color[1],
+                              color: conflict ? '#9f1239' : color[1],
+                            }}
+                            type="button"
+                          >
+                            <strong>{course.name}</strong>
+                            <span>{schedule.room}</span>
+                          </button>
+                        );
+                      }),
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <CalendarDays />
+              <h3>课表还是空的</h3>
+              <p>回到课程列表，点击课程卡片右上角的星标即可加入。</p>
+              <Button
+                onClick={() => {
+                  setTimetableOpen(false);
+                  setView('courses');
+                }}
+              >
+                去选择课程
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
