@@ -64,7 +64,9 @@ import {
   formatConflictSlot,
   formatCredits,
   getConflictSlots,
+  isAcademicDegree,
   isCourse,
+  isDegreeCourseInScope,
   isDegreeRoleSettable,
   isMasterEnglishCourseName,
   MASTER_ENGLISH_CREDITS,
@@ -90,6 +92,7 @@ import {
 } from '@/components/ui/sheet';
 import EnrollmentNotice from '@/app/enrollment-notice';
 import { PROGRAM_PLANS } from '@/app/program-plans';
+import { academicScopeMajors } from '@/app/major-map';
 
 // 智能选课建议开关：置 true 开启（推荐算法见 lib/course-tools.ts）。
 const SHOW_SMART_SUGGESTIONS = true;
@@ -973,6 +976,29 @@ export default function CourseExplorer({
   // 创新创业模块课的归属取决于培养方向：专硕单列为“创新创业课”1 学分；
   // 学硕/博士未单列时，它们仍属公共选修课学分。
   const planSeparatesInnovation = activePlan.innovationCredits !== null;
+  // 本方向“可作为专业学位课”的范围：
+  // - 培养方案课程库（coreCourses ∪ professionalCourses）始终允许；
+  // - 学术型（学硕/博士）额外允许“一级学科及其映射内所属二级学科”的课程；
+  // - 专硕只允许本专业培养方案课程（academicMajors 传空）。
+  const degreeCourseScope = useMemo(
+    () => ({
+      planCourses: [
+        ...activePlan.coreCourses,
+        ...activePlan.professionalCourses,
+      ],
+      academicMajors: isAcademicDegree(activePlan.degree)
+        ? academicScopeMajors(activePlan.program)
+        : [],
+      academic: isAcademicDegree(activePlan.degree),
+    }),
+    [activePlan],
+  );
+  const canUseAsDegreeCourse = useCallback(
+    (course: Course) =>
+      isDegreeRoleSettable(course.category) &&
+      isDegreeCourseInScope(course, degreeCourseScope),
+    [degreeCourseScope],
+  );
   // 已选课程的学位属性（仅保存用户显式设置；未设置为 null）
   const degreeRolesOfTerm = useMemo(
     () => degreeRolesByTerm[activeTermId] ?? {},
@@ -983,9 +1009,12 @@ export default function CourseExplorer({
       const kind = courseDegreeRoleKind(course);
       if (kind === 'forcedNonDegree') return 'nonDegree';
       if (kind === 'none') return null;
+      // 核心课/专业课：若不在本方向可作学位课的范围（如专硕选了外专业课程），
+      // 只允许作为非学位课，防止误计入学分。
+      if (!canUseAsDegreeCourse(course)) return 'nonDegree';
       return degreeRolesOfTerm[course.id] ?? null;
     },
-    [degreeRolesOfTerm],
+    [canUseAsDegreeCourse, degreeRolesOfTerm],
   );
   const setDegreeRoleForActive = useCallback(
     (courseId: string, role: DegreeRole | null) => {
@@ -1136,7 +1165,9 @@ export default function CourseExplorer({
         required: activePlan.degreeCourseCredits,
         hint:
           activePlan.coreMinimum === null && activePlan.professionalMinimum === null
-            ? '学位课须为培养方案核心课/专业课并勾选“作为学位课”'
+            ? isAcademicDegree(activePlan.degree)
+              ? '学位课须为培养方案核心课/专业课，或本一级学科/所属二级学科课程，并勾选“作为学位课”'
+              : '学位课仅限本专业培养方案核心课/专业课，并勾选“作为学位课”'
             : `其中至少 ${activePlan.coreMinimum} 门核心课、${activePlan.professionalMinimum} 门专业课`,
         nullText: '不限',
         role: { coreDegree, proDegree, fromDegree, pending: pendingRoleCourses.length },
@@ -1227,6 +1258,10 @@ export default function CourseExplorer({
         innovationCredits: activePlan.innovationCredits,
         homeCollege: activePlan.homeCollege ?? '',
         coreFrom: activePlan.coreFrom,
+        // 学术型把一级/二级学科范围传给推荐，专硕为空（仅培养方案课程库）
+        degreeMajors: degreeCourseScope.academic
+          ? degreeCourseScope.academicMajors
+          : [],
       },
       englishExemption,
     });
@@ -1247,6 +1282,7 @@ export default function CourseExplorer({
     };
   }, [
     activePlan,
+    degreeCourseScope,
     degreeRoleOf,
     earnedByBucket,
     englishExemption,
@@ -1257,6 +1293,15 @@ export default function CourseExplorer({
   ]);
   const degreeBucket = requirementBuckets.find(
     (bucket) => bucket.id === 'degree',
+  );
+  // 已选但尚未设置学位属性的核心课/专业课（引导用户逐个确认，设置后立即计入统计）
+  const pendingDegreeRoleCourses = useMemo(
+    () =>
+      selectedCourses.filter(
+        (course) =>
+          isDegreeRoleSettable(course.category) && degreeRoleOf(course) === null,
+      ),
+    [degreeRoleOf, selectedCourses],
   );
   const graduationPercent = Math.min(
     100,
@@ -1709,52 +1754,83 @@ export default function CourseExplorer({
         </section>
 
         <section className="relative z-20 mt-3.5 rounded-[22px] border border-[#e1e5df] bg-white/94 p-3.5 shadow-[0_14px_40px_rgba(61,83,72,.07)] backdrop-blur sm:p-4">
-          <div className="mb-3 flex flex-col gap-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3.5 sm:flex-row sm:items-end sm:justify-between">
-            <div className="min-w-0">
-              <label
-                className="mb-1.5 block text-xs font-semibold tracking-wide text-slate-500"
-                htmlFor="term-select"
-              >
-                当前课程数据学期
-              </label>
-              <div className="flex flex-wrap items-center gap-2">
-                <NativeSelect
-                  aria-label="切换课程数据学期"
-                  className="w-full min-w-[190px] sm:w-auto [&>select]:h-10"
-                  id="term-select"
-                  onChange={(event) => switchTerm(event.target.value)}
-                  value={activeTermId}
-                >
-                  {availableDatasets.map((dataset) => (
-                    <NativeSelectOption key={dataset.id} value={dataset.id}>
-                      {dataset.label}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-                <span className="text-xs leading-5 text-slate-500">
-                  已选课程按学期独立保存
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch">
+            {/* 学期切换卡片 */}
+            <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border border-[#e1e5df] bg-gradient-to-br from-[#fbfdfc] to-[#f4f9f6] p-4">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e6f4ee] text-[#147d6f]">
+                  <CalendarDays className="size-5" />
                 </span>
+                <div className="min-w-0">
+                  <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                    当前课程数据
+                  </p>
+                  <h2 className="truncate text-[0.95rem] font-bold text-slate-800">
+                    选择浏览的学期
+                  </h2>
+                </div>
               </div>
-            </div>
-            <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
-              <input
-                accept=".json,application/json"
-                className="sr-only"
-                onChange={handleCourseDataImport}
-                ref={dataFileRef}
-                type="file"
-              />
-              <Button
-                className="h-10 rounded-xl border-blue-200 bg-white px-4 text-blue-700 hover:bg-blue-50"
-                onClick={() => dataFileRef.current?.click()}
-                variant="outline"
+              <NativeSelect
+                aria-label="切换课程数据学期"
+                className="w-full [&>select]:h-11"
+                id="term-select"
+                onChange={(event) => switchTerm(event.target.value)}
+                value={activeTermId}
               >
-                <RefreshCw /> 一键更新课程数据
-              </Button>
-              <span className="text-right text-[0.72rem] leading-5 text-slate-500">
-                选择课程数据 JSON（可含 term、label、courses 字段）
-              </span>
-              <div className="flex flex-wrap justify-end gap-1.5">
+                {availableDatasets.map((dataset) => (
+                  <NativeSelectOption key={dataset.id} value={dataset.id}>
+                    {dataset.label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <p className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem] leading-4 text-slate-500">
+                <span className="inline-flex items-center gap-1 font-medium text-[#147d6f]">
+                  <span className="size-1.5 rounded-full bg-[#7ad3bd]" />
+                  {compactTermLabel(activeDataset.label)}
+                </span>
+                <span>·</span>
+                <span>{initialCourses.length} 门课程</span>
+                {activeDataset.updatedAt && (
+                  <>
+                    <span>·</span>
+                    <span>更新于 {activeDataset.updatedAt.slice(0, 10)}</span>
+                  </>
+                )}
+                <span>·</span>
+                <span>已选课程按学期独立保存</span>
+              </p>
+            </div>
+
+            {/* 课程数据与备份卡片 */}
+            <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border border-[#e1e5df] bg-white p-4">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
+                  <FileSpreadsheet className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                    课程数据与备份
+                  </p>
+                  <h2 className="truncate text-[0.95rem] font-bold text-slate-800">
+                    更新课表、导出或恢复
+                  </h2>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  accept=".json,application/json"
+                  className="sr-only"
+                  onChange={handleCourseDataImport}
+                  ref={dataFileRef}
+                  type="file"
+                />
+                <Button
+                  className="h-10 rounded-xl border-blue-200 bg-blue-50 px-4 text-blue-700 hover:bg-blue-100"
+                  onClick={() => dataFileRef.current?.click()}
+                  variant="outline"
+                >
+                  <RefreshCw /> 更新课程数据
+                </Button>
                 <Button
                   className="h-10 rounded-xl border-slate-200 bg-white px-3 text-slate-600 hover:bg-slate-50"
                   onClick={exportBackup}
@@ -1769,17 +1845,17 @@ export default function CourseExplorer({
                 >
                   <Upload /> 恢复备份
                 </Button>
+                <input
+                  accept=".json,application/json"
+                  className="sr-only"
+                  onChange={handleBackupRestore}
+                  ref={backupFileRef}
+                  type="file"
+                />
               </div>
-              <input
-                accept=".json,application/json"
-                className="sr-only"
-                onChange={handleBackupRestore}
-                ref={backupFileRef}
-                type="file"
-              />
-              <span className="text-right text-[0.72rem] leading-5 text-slate-500">
-                备份含学期数据、按学期选课记录与已修学分，可跨浏览器迁移
-              </span>
+              <p className="mt-auto text-[0.72rem] leading-4 text-slate-500">
+                “更新课程数据”支持含 term、label、courses 字段的 JSON（也用于覆盖当前学期）；备份含学期数据、选课记录、学位属性与已修学分，可跨浏览器迁移。
+              </p>
             </div>
           </div>
           {(dataMessage || dataError) && (
@@ -1810,7 +1886,23 @@ export default function CourseExplorer({
               </button>
             </div>
           )}
-          <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(4,minmax(138px,.62fr))_auto]">
+          <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-[#eef1ee] bg-[#fbfcfa] p-3.5 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-slate-600">
+                <SlidersHorizontal className="size-4" />
+                <span className="text-sm font-semibold text-slate-700">
+                  筛选课程
+                </span>
+              </div>
+              <button
+                className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 transition hover:text-rose-600"
+                onClick={clearFilters}
+                type="button"
+              >
+                <X className="size-3.5" /> 清空筛选
+              </button>
+            </div>
+            <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(240px,1.5fr)_repeat(4,minmax(136px,.62fr))]">
             <label className="relative block" htmlFor="course-search">
               <span className="sr-only">搜索课程</span>
               <Search className="absolute left-3 top-1/2 z-10 size-4 -translate-y-1/2 text-slate-400" />
@@ -1878,13 +1970,6 @@ export default function CourseExplorer({
                 </NativeSelectOption>
               ))}
             </NativeSelect>
-            <Button
-              className="h-11 rounded-xl border-slate-200 px-4 text-slate-600"
-              onClick={clearFilters}
-              variant="outline"
-            >
-              <X /> 清空筛选
-            </Button>
           </div>
 
           {conflictPairs.length > 0 && (
@@ -1972,6 +2057,7 @@ export default function CourseExplorer({
               </div>
             </div>
           )}
+          </div>
         </section>
 
         <div className="sticky top-2 z-40 mb-1 flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/90 p-2.5 shadow-[0_10px_30px_rgba(20,48,88,0.07)] backdrop-blur-md md:flex-row md:items-center md:justify-between">
@@ -2139,6 +2225,51 @@ export default function CourseExplorer({
                           <Star className={selected ? 'fill-current' : ''} />
                         </button>
                       </div>
+                      {selected && isDegreeRoleSettable(course.category) && (
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="text-[0.7rem] font-semibold text-slate-600">
+                              学位属性
+                            </p>
+                            <p
+                              className={`text-[0.64rem] leading-4 ${
+                                !canUseAsDegreeCourse(course)
+                                  ? 'text-slate-500'
+                                  : degreeRoleOf(course) === null
+                                    ? 'font-medium text-amber-600'
+                                    : 'text-slate-400'
+                              }`}
+                            >
+                              {!canUseAsDegreeCourse(course)
+                                ? isAcademicDegree(activePlan.degree)
+                                  ? '本课程不属于本一级学科/所属二级学科，仅可作为非学位课'
+                                  : '本课程不在本专业的学位课范围，仅可作为非学位课'
+                                : degreeRoleOf(course) === null
+                                  ? '未标记，暂不计入学分与门数'
+                                  : degreeRoleOf(course) === 'degree'
+                                    ? '计入专业学位课'
+                                    : '计入专业非学位课'}
+                            </p>
+                          </div>
+                          {canUseAsDegreeCourse(course) ? (
+                            <DegreeRoleControl
+                              compact
+                              onChange={(role) =>
+                                setDegreeRoleForActive(course.id, role)
+                              }
+                              value={degreeRoleOf(course)}
+                            />
+                          ) : (
+                            <Badge variant="outline">仅非学位课</Badge>
+                          )}
+                        </div>
+                      )}
+                      {selected &&
+                        courseDegreeRoleKind(course) === 'forcedNonDegree' && (
+                          <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[0.7rem] leading-4 text-slate-500">
+                            研讨课/实验课/实践课/讲座：仅可作为非学位课修读
+                          </div>
+                        )}
 
                       <div className="my-3.5 h-px bg-slate-100" />
                       <div className="grid grid-cols-2 gap-3 text-sm">
@@ -2157,27 +2288,6 @@ export default function CourseExplorer({
                           </span>
                         </div>
                       </div>
-                      {selected &&
-                        courseDegreeRoleKind(course) === 'settable' && (
-                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
-                            <span className="text-[0.72rem] font-medium text-slate-500">
-                              学位属性
-                            </span>
-                            <DegreeRoleControl
-                              compact
-                              onChange={(role) =>
-                                setDegreeRoleForActive(course.id, role)
-                              }
-                              value={degreeRoleOf(course)}
-                            />
-                          </div>
-                        )}
-                      {selected &&
-                        courseDegreeRoleKind(course) === 'forcedNonDegree' && (
-                          <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-[0.72rem] text-slate-500">
-                            研讨课/实验课/实践课/讲座：仅可作为非学位课修读
-                          </div>
-                        )}
                       <div className="course-meta-line">
                         <span>
                           <ClipboardCheck /> {course.examMode || '考试方式待定'}
@@ -2314,6 +2424,56 @@ export default function CourseExplorer({
               </div>
             )}
 
+            {pendingDegreeRoleCourses.length > 0 && (
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+                <div className="flex items-start gap-2.5">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-600">
+                    <ClipboardCheck className="size-5" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-800">
+                      待确认学位属性（{pendingDegreeRoleCourses.length} 门）
+                    </h3>
+                    <p className="mt-0.5 text-xs leading-5 text-slate-600">
+                      以下已选课程在本方向可作为学位课的范围内，但尚未标记为“学位课”，因此暂未计入上方的专业学位课学分与门数。选择修读属性后会自动计入统计；研讨课/实验课等只能作为非学位课。
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {pendingDegreeRoleCourses.map((course) => (
+                    <div
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200/70 bg-white px-3 py-2"
+                      key={course.id}
+                    >
+                      <div className="min-w-0">
+                        <button
+                          className="text-left font-medium text-slate-800 hover:text-blue-700"
+                          onClick={() => setDetailCourse(course)}
+                          type="button"
+                        >
+                          {course.name}
+                        </button>
+                        <p className="text-xs leading-5 text-slate-500">
+                          {course.category} · {formatCredits(course.credits)} 学分
+                          {isPlanCoreName(course.name)
+                            ? ' · 方案核心课'
+                            : isPlanProName(course.name)
+                              ? ' · 方案专业课'
+                              : ''}
+                        </p>
+                      </div>
+                      <DegreeRoleControl
+                        onChange={(role) =>
+                          setDegreeRoleForActive(course.id, role)
+                        }
+                        value={degreeRoleOf(course)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="font-bold">学分达成度</h3>
@@ -2381,6 +2541,8 @@ export default function CourseExplorer({
                   let statusText: string;
                   if (met) {
                     statusText = '已达标';
+                  } else if (required !== null && !creditsMet && rolePending > 0) {
+                    statusText = `还差 ${formatCredits(remaining)} 学分，另有 ${rolePending} 门已选核心课/专业课待标记学位属性（标记后计入）`;
                   } else if (required !== null && !creditsMet) {
                     statusText = `还差 ${formatCredits(remaining)} 学分`;
                   } else if (role && rolePending > 0) {
@@ -2551,7 +2713,7 @@ export default function CourseExplorer({
                   </span>
                 </div>
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  推荐口径：专业学位课默认只推荐本专业培养方案中的核心课和专业课；专业非学位课默认只推荐本学院开设的课程。相关学科课程如需作为学位课、或需跨学院修读专业非学位课，请根据导师及学院意见手动选择。学位课数量按实际设置“学位课”的课程门数考核，已修学分不计入门数。
+                  推荐口径：学术型方向（学硕/博士）可将本一级学科及其所属二级学科的课程作为学位课；专业型方向（专硕）只认可本专业培养方案列出的专业课/核心课作为学位课。智能推荐只在本方向上述范围内产生学位课建议；专业非学位课默认只推荐本学院开设的课程。跨范围/跨学院如需修读，请按培养方案及导师/学院意见手动选择。学位课数量按实际设置“学位课”的课程门数考核，已修学分不计入门数。
                 </p>
               {suggestions.rows.length > 0 && (
                 <>
@@ -2679,7 +2841,7 @@ export default function CourseExplorer({
             <div className="coverage-note mt-4">
               <Info />
               <span>
-                这里统计的是本学期已选课程对培养方案课程库的覆盖情况；只有被标记为“学位课”的核心课/专业课才计入上方学位课门数与学分，未确认属性时不会自动计入。学位课数量以你手动确认的“学位属性”为准，不代表课程已被认定为学位课。
+                这里统计的是本学期已选课程对学位课范围的覆盖情况：学术型方向覆盖“本一级学科/所属二级学科或培养方案课程”，专硕只覆盖本专业培养方案课程；只有范围内并被标记为“学位课”的课程才计入上方学位课门数与学分。范围外或未标记的课程不会自动计入。
               </span>
             </div>
 
@@ -3237,10 +3399,14 @@ export default function CourseExplorer({
                         <p className="mt-0.5 text-[0.68rem] leading-4 text-slate-500">
                           {courseDegreeRoleKind(detailCourse) === 'forcedNonDegree'
                             ? '研讨课/实验课/实践课/讲座等只能作为非学位课修读。'
-                            : '设为“学位课”计入专业学位课学分与门数；设为“非学位课”计入专业非学位课。'}
+                            : !canUseAsDegreeCourse(detailCourse)
+                              ? isAcademicDegree(activePlan.degree)
+                                ? '本课程不属于本一级学科/所属二级学科，仅可作为非学位课。'
+                                : '本课程不在本专业的学位课范围，仅可作为非学位课。'
+                              : '设为“学位课”计入专业学位课学分与门数；设为“非学位课”计入专业非学位课。'}
                         </p>
                       </div>
-                      {courseDegreeRoleKind(detailCourse) === 'settable' ? (
+                      {canUseAsDegreeCourse(detailCourse) ? (
                         <DegreeRoleControl
                           onChange={(role) =>
                             setDegreeRoleForActive(detailCourse.id, role)

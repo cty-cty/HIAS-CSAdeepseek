@@ -78,6 +78,55 @@ export function courseSubjectDisplay(
     .join('、');
 }
 
+/**
+ * 课程是否属于给定的学科/专业集合（一级学科、二级学科、专业学位领域名称等）。
+ * 多专业课程（subjects）任一名匹配即算；旧数据仅有 subject 字段时以它为准。
+ */
+export function courseInMajorScope(
+  course: Pick<Course, 'subject' | 'subjects'>,
+  majorNames: string[],
+) {
+  const names = new Set(majorNames);
+  return courseSubjects(course).some((item) => names.has(item.name));
+}
+
+/** 学位类型是否属于学术型（学硕/博士）；专硕/专业学位返回 false。 */
+export function isAcademicDegree(degree: string) {
+  return degree !== '专业型硕士' && degree !== '专业型';
+}
+
+export type DegreeCourseScope = {
+  /** 培养方案课程库（coreCourses∪professionalCourses，按去班号基础名）。 */
+  planCourses: string[];
+  /**
+   * 学术型允许的学科范围（一级学科 + 映射表内所属二级学科）。
+   * 专硕本应为空——专硕学位课范围仅限本专业培养方案课程库。
+   */
+  academicMajors: string[];
+  /** 该方向是否为学术型（学硕/博士）。 */
+  academic: boolean;
+};
+
+/**
+ * 某课程是否可被认作当前方向的“专业学位课”：
+ * - 培养方案课程库内的课程始终可作学位课（本专业核心课/专业课）；
+ * - 学术型额外允许“一级学科及其所属二级学科”的课程（courseInMajorScope）；
+ * - 专硕只允许本专业培养方案课程（academicMajors 应传空）。
+ */
+export function isDegreeCourseInScope(
+  course: Pick<Course, 'name' | 'subject' | 'subjects'>,
+  scope: DegreeCourseScope,
+) {
+  const base = courseBaseName(course.name);
+  if (scope.planCourses.some((name) => courseBaseName(name) === base)) {
+    return true;
+  }
+  if (scope.academic && scope.academicMajors.length > 0) {
+    return courseInMajorScope(course, scope.academicMajors);
+  }
+  return false;
+}
+
 export type CourseDataset = {
   id: string;
   label: string;
@@ -377,6 +426,11 @@ export type PlanForRecommendation = {
   homeCollege: string;
   /** 方向性“来源集合”：如人工智能要求核心课中至少 1 门来自这些课程。 */
   coreFrom?: string[];
+  /**
+   * 学术型允许作为学位课的学科范围（一级学科 + 所属二级学科名称）。
+   * 为空（或缺省）时，学位课只从 coreCourses∪professionalCourses 中推荐。
+   */
+  degreeMajors?: string[];
 };
 
 export type RecommendationInput = {
@@ -589,8 +643,11 @@ export function computeCourseRecommendations(
       pool: courses.filter(
         (c) =>
           valid(c) &&
-          (librarySet.has(c.name) ||
-            libraryBaseSet.has(courseBaseName(c.name))),
+          ((librarySet.has(c.name) ||
+            libraryBaseSet.has(courseBaseName(c.name))) ||
+            (plan.degreeMajors?.length
+              ? courseInMajorScope(c, plan.degreeMajors)
+              : false)),
       ),
     },
     {
@@ -741,7 +798,9 @@ export function computeCourseRecommendations(
           ? `本专业专业课，专业课要求还差 ${remainingProCount} 门`
           : '本专业专业课，补齐专业学位课学分';
       }
-      return '本专业学位课，补齐专业学位课学分';
+      return plan.degreeMajors?.length
+        ? '本一级学科/所属二级学科课程，可作为学位课补足学分'
+        : '本专业学位课，补齐专业学位课学分';
     }
     if (bucket === 'professionalNonDegree') {
       const cat = course.category || '课程';

@@ -24,6 +24,7 @@ import {
   formatWeekRanges,
   getConflictSlots,
   isCourse,
+  isDegreeCourseInScope,
   isDegreeRoleSettable,
   isForcedNonDegreeCategory,
   isMasterEnglishCourseName,
@@ -731,4 +732,63 @@ test('parseBackupPayload: 学位属性（degreeRoles）往返与容错', () => {
     }),
   );
   assert.deepEqual(legacy.degreeRoles, {});
+});
+
+test('major scope: 学术型允许一级学科及所属二级学科课程作学位课', () => {
+  // 课程属于二级学科「物理电子学」（一级=电子科学与技术）
+  const course = makeCourse({
+    category: '专业课',
+    subject: '物理电子学',
+  });
+  const scope = {
+    planCourses: [],
+    // 学术型物理电子学：一级=电子科学与技术 + 二级=物理电子学
+    academicMajors: ['电子科学与技术', '物理电子学'],
+    academic: true,
+  };
+  assert.equal(isDegreeCourseInScope(course, scope), true);
+
+  // 属于一级学科名的课程也允许（如 电子科学与技术）
+  const firstLevelCourse = makeCourse({
+    category: '专业核心课',
+    subject: '电子科学与技术',
+  });
+  assert.equal(isDegreeCourseInScope(firstLevelCourse, scope), true);
+
+  // 专硕：academic=false 且无 academicMajors → 只认培养方案课程名单
+  const profScope = {
+    planCourses: ['本专业核心一'],
+    academicMajors: [],
+    academic: false,
+  };
+  const inPlan = makeCourse({ name: '本专业核心一', subject: '任意学科' });
+  assert.equal(isDegreeCourseInScope(inPlan, profScope), true);
+  // 外专业课程不能作为学位课
+  const outPlan = makeCourse({ name: '其他专业课程', subject: '理论物理' });
+  assert.equal(isDegreeCourseInScope(outPlan, profScope), false);
+});
+
+test('major map: academicScopeMajors 返回一级+二级学科集合', async () => {
+  const { academicScopeMajors, PROFESSIONAL_SCOPES } = await import(
+    '../app/major-map.ts'
+  );
+  assert.deepEqual(academicScopeMajors('物理电子学'), [
+    '电子科学与技术',
+    '物理电子学',
+  ]);
+  assert.deepEqual(academicScopeMajors('理论物理'), [
+    '物理学',
+    '理论物理',
+    '精密测量物理',
+  ]);
+  // 找不到映射时退回仅本专业
+  assert.deepEqual(academicScopeMajors('未知方向'), ['未知方向']);
+  assert.ok(
+    PROFESSIONAL_SCOPES.some(
+      (scope) =>
+        scope.category === '电子信息' &&
+        scope.fields.includes('光电信息工程') &&
+        scope.fields.includes('人工智能'),
+    ),
+  );
 });
