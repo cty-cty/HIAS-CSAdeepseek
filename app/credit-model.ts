@@ -164,6 +164,29 @@ export function isDegreeEligibleByCode(
   return ['学科核心课', '专业核心课', '专业课'].includes(course.category);
 }
 
+const CORE_CODE_CATEGORIES = ['subject-core', 'professional-core'];
+
+/**
+ * 是否属于“学位课 2+2”中的核心课（学科核心课/专业核心课）。
+ * 编码可解析时按编码第14位判断；编码未知（如尚未发布的春季课程）按课程类别回退。
+ */
+export function isCoreDegreeType(
+  course: Pick<CourseLike, 'code' | 'category'>,
+) {
+  const codeCategory = getCourseCodeCategory(course.code);
+  if (codeCategory !== 'unknown') return CORE_CODE_CATEGORIES.includes(codeCategory);
+  return ['学科核心课', '专业核心课'].includes(course.category);
+}
+
+/** 是否属于“学位课 2+2”中的专业课。编码未知时按课程类别回退。 */
+export function isProfessionalDegreeType(
+  course: Pick<CourseLike, 'code' | 'category'>,
+) {
+  const codeCategory = getCourseCodeCategory(course.code);
+  if (codeCategory !== 'unknown') return codeCategory === 'professional';
+  return course.category === '专业课';
+}
+
 export function getDegreeEligibility(
   course: Pick<CourseLike, 'code' | 'category' | 'name' | 'subject'>,
   plan?: ProgramPlan,
@@ -192,7 +215,15 @@ export function getDegreeEligibility(
 
   if (kind === 'academic') {
     const allowedSubjects = getAcademicAllowedSubjects(plan);
-    if (allowedSubjects?.has(course.subject)) {
+    // 课程可能同时归属多个学科（subject 以 、/；分隔），任一命中一级/二级学科范围即认可。
+    const subjectTokens = (course.subject ?? '')
+      .split(/[、,，;；/]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const inScope = allowedSubjects
+      ? subjectTokens.some((subject) => allowedSubjects.has(subject))
+      : false;
+    if (inScope) {
       return {
         status: 'eligible',
         reason: `属于一级学科“${mapping.firstLevel}”及其已映射二级学科范围。`,
@@ -314,6 +345,18 @@ export function courseFamilyKey(course: Pick<CourseLike, 'code' | 'name'>) {
   return courseBaseName(course.name) || course.code.replace(/-\d+$/, '');
 }
 
+/**
+ * 学位属性按“课程”整体标记，而非按“班次”：
+ * 同一门课的不同班级（如 新中特-01/02/03班、英语各小班）共用同一个 family key，
+ * 保证 1 班标为学位课后，2 班、3 班视为同一属性，不产生“一班是、二班不是”的矛盾。
+ * 存储键：`family:<courseFamilyKey>`（读取时兼容旧版按完整课程编码保存的数据）。
+ */
+export function designationLookupKey(
+  course: Pick<CourseLike, 'code' | 'name'>,
+) {
+  return `family:${courseFamilyKey(course)}`;
+}
+
 export function isEnglishCourse(course: Pick<CourseLike, 'code' | 'name'>) {
   return /050200MB001/i.test(course.code) || course.name.startsWith('英语');
 }
@@ -374,7 +417,8 @@ export function getCourseDesignation(
   designations: Record<string, CourseDesignation>,
   plan?: ProgramPlan,
 ) {
-  const stored = designations[course.code];
+  const stored =
+    designations[designationLookupKey(course)] ?? designations[course.code];
   if (isEngineeringEthics(course)) {
     return 'non-degree';
   }
@@ -750,15 +794,13 @@ export function getPlanCourseCounts({
     (course) =>
       getCourseDesignation(course, designations, plan) === 'degree' &&
       getDegreeEligibility(course, plan).status === 'eligible' &&
-      ['subject-core', 'professional-core'].includes(
-        getCourseCodeCategory(course.code),
-      ),
+      isCoreDegreeType(course),
   ).length;
   const selectedProfessionalCount = courses.filter(
     (course) =>
       getCourseDesignation(course, designations, plan) === 'degree' &&
       getDegreeEligibility(course, plan).status === 'eligible' &&
-      getCourseCodeCategory(course.code) === 'professional',
+      isProfessionalDegreeType(course),
   ).length;
   const historicalCoreCount = historicalRecords.filter(
     (record) =>
@@ -773,9 +815,7 @@ export function getPlanCourseCounts({
         },
         plan,
       ).status === 'eligible' &&
-      ['subject-core', 'professional-core'].includes(
-        getCourseCodeCategory(record.courseCode),
-      ),
+      isCoreDegreeType(record),
   ).length;
   const historicalProfessionalCount = historicalRecords.filter(
     (record) =>
@@ -790,7 +830,7 @@ export function getPlanCourseCounts({
         },
         plan,
       ).status === 'eligible' &&
-      getCourseCodeCategory(record.courseCode) === 'professional',
+      isProfessionalDegreeType(record),
   ).length;
   return {
     coreCount: selectedCoreCount + historicalCoreCount,

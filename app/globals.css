@@ -3057,7 +3057,7 @@ button {
   color: #234c89;
 }
 .selection-list {
-  max-height: 17rem;
+  max-height: 13.5rem;
   overflow-y: auto;
   scrollbar-width: thin;
 }
