@@ -29,6 +29,7 @@ export default defineConfig({
       fileName: () => 'app.js',
       cssFileName: 'app',
     },
+    // oxlint-disable-next-line typescript/no-deprecated -- Vite 8 兼容别名（新名 rolldownOptions）
     rollupOptions: {
       output: {
         inlineDynamicImports: true,

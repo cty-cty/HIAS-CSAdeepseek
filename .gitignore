@@ -38,3 +38,5 @@ next-env.d.ts
 /outputs/
 /work/
 /.openai/hosting.json
+tsconfig.tsbuildinfo
+tsconfig.tsbuildinfo.*

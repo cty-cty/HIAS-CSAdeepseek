@@ -1,5 +1,9 @@
 'use client';
 
+// 巨型历史组件：局部禁用 React Compiler 优化检查（与旧归档一致）。
+// 培养规则全部由纯函数模块确定性执行，不受该禁用影响。
+/* oxlint-disable react/react-compiler */
+
 import {
   type ChangeEvent,
   useCallback,
@@ -84,6 +88,7 @@ import {
 import { PROGRAM_PLANS, type ProgramPlan } from '@/app/program-plans';
 import {
   calculateCreditSummary,
+  courseBaseName,
   courseFamilyKey,
   designationLookupKey,
   getDegreeEligibility,
@@ -91,7 +96,6 @@ import {
   getCourseRequirementTypeLabel,
   getCourseRoleEligibility,
   getCourseDesignation,
-  getCourseCodeCategory,
   isCoreDegreeType,
   isProfessionalDegreeType,
   getPlanCourseCounts,
@@ -107,6 +111,21 @@ import {
   type HistoricalRecord,
 } from '@/app/credit-model';
 import { getGraduateProgramScopeLabel } from '@/app/graduate-program-mapping';
+import {
+  canonicalCourseId,
+  displayCourseCode,
+} from './course-identity';
+import {
+  calculateSemesterCheckup,
+  type SemesterCheckup,
+} from './program-rules';
+import {
+  buildCandidates,
+  collectConfirmedDegreeNames,
+  generateRecommendationPlans,
+  type GeneratedPlan,
+  type RecommendationResult,
+} from './recommendation-engine';
 import springCoursesData from './courses-spring.json';
 
 type Schedule = {
@@ -140,6 +159,19 @@ type Course = {
   campus?: string;
   chiefProfessor?: string;
   assistant?: string;
+  /**
+   * 学校正式课程编码（可空）。占位编码（SP2027-xxx）只允许在 code 字段内部使用，
+   * 展示时请使用 course-identity 的 displayCourseCode，避免把占位码当成正式编码。
+   */
+  officialCode?: string | null;
+  /**
+   * 课程数据状态：
+   * 'planned' = 依据培养方案整理的春季计划课程（时间/班次/最终开设待正式课表）；
+   * 'confirmed' / 缺省 = 当前学期正式课表课程。
+   */
+  scheduleStatus?: 'planned' | 'confirmed';
+  /** 学期标注（春 / 秋、春 / 秋），课程数据文件提供时可选。 */
+  semesterNote?: string;
   schedules: Schedule[];
   module?: CourseModule;
   requirementType?: CourseRequirementType;
@@ -189,6 +221,7 @@ const HISTORICAL_RECORDS_STORAGE_KEY = 'hias-historical-records-v1';
 const ENGLISH_EXEMPTION_STORAGE_KEY = 'hias-english-exemption-v1';
 const ACTIVE_PROGRAM_STORAGE_KEY = 'hias-active-program-v1';
 const INITIAL_SETTINGS_STORAGE_KEY = 'hias-initial-settings-completed-v1';
+const DOCTOR_TRACK_STORAGE_KEY = 'hias-doctor-track-v1';
 const LEGACY_SELECTED_STORAGE_KEY = 'ucas-hangzhou-selected';
 const BACKUP_VERSION = 2;
 const EMPTY_SELECTED_IDS: string[] = [];
@@ -410,16 +443,6 @@ function designationLabel(value: CourseDesignation) {
   return '未确定';
 }
 
-function englishStatusLabel(value: ExemptionStatus) {
-  return value === 'approved'
-    ? '已获得英语免修免考资格'
-    : '未获得英语免修免考资格';
-}
-
-function englishStatusTone(value: ExemptionStatus) {
-  return value === 'approved' ? 'approved' : 'not-qualified';
-}
-
 function intersects<T>(left: T[], right: T[]) {
   const lookup = new Set(left);
   return right.some((item) => lookup.has(item));
@@ -519,6 +542,9 @@ function formatRequirementProgress(
 }
 
 function formatEnrollment(course: Course) {
+  if (course.scheduleStatus === 'planned') {
+    return '名额信息待春季正式课表公布';
+  }
   const capacity = course.capacity > 0 ? course.capacity : null;
   const enrolled = course.enrolled > 0 ? course.enrolled : null;
   if (capacity && enrolled !== null) {
@@ -527,6 +553,19 @@ function formatEnrollment(course: Course) {
   if (capacity) return `限选人数 ${capacity} · 已选人数暂无`;
   if (enrolled !== null) return `已选人数 ${enrolled} · 限选人数未提供`;
   return '名额信息未提供';
+}
+
+/**
+ * 课程编码展示：占位码（SP2027-xxx）与缺失编码都不会伪装成学校正式编码，
+ * 统一显示为“内部占位编码 / 待春季正式课表公布”。
+ */
+function courseCodeDisplayText(
+  course: Pick<Course, 'code' | 'officialCode'>,
+) {
+  const shown = displayCourseCode(course);
+  if (shown.text) return shown.text;
+  if (shown.kind === 'placeholder') return '内部占位编码（待正式课程编码）';
+  return '待春季正式课表公布';
 }
 
 function courseColor(courseId: string) {
@@ -725,12 +764,6 @@ function isProgramPlan(value: unknown): value is ProgramPlan {
   );
 }
 
-function formatUpdatedAt(value?: string) {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('zh-CN');
-}
-
 function parseProgramPlans(text: string): ProgramPlan[] {
   let parsed: unknown;
   try {
@@ -908,6 +941,15 @@ export default function CourseExplorer({
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [sportsLimitOpen, setSportsLimitOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  /**
+   * 博士培养类型（普博 general_phd / 直博 direct_phd / 硕博连读 combined_phd）。
+   * 仅当培养方案为博士时有意义；普博的学院级规则未明确 → 页面按待确认展示。
+   */
+  const [doctorTrack, setDoctorTrack] = useState<
+    'general_phd' | 'direct_phd' | 'combined_phd' | undefined
+  >(undefined);
+  /** 智能补全方案中等待用户确认应用的方案。 */
+  const [applyPlan, setApplyPlan] = useState<GeneratedPlan | null>(null);
   const [undoSelection, setUndoSelection] = useState<{
     termId: string;
     ids: string[];
@@ -947,10 +989,15 @@ export default function CourseExplorer({
   const audienceLabel =
     activeDataset.audience ||
     (isDefaultTerm ? '2026 级研一新生专用' : '适用对象以课程数据说明为准');
+  const isSpringTerm = activeTermId === '2027-spring';
+  const planCourseDataNote =
+    activeTermId === '2027-spring'
+      ? ' 当前春季专业/公共课程为依据 2026—2027 培养方案整理的“春季计划课程”；课程时间、班次、容量与最终开设情况以春季正式课表及教务系统为准。'
+      : '';
   const heroDescription = isDefaultTerm
     ? '课程数据依据已整理的 2026 年秋季课表与培养方案材料，仅供参考，用于帮助大家模拟选课、查看冲突与规划学分；最终课程安排请以学校正式通知和选课系统为准。'
     : activeDataset.courses.length
-      ? `当前使用“${activeDataset.label}”课程数据，仅供参考，用于模拟选课、查看冲突与规划学分；适用年级、培养要求和最终课程安排请以对应学校通知及选课系统为准。`
+      ? `当前使用“${activeDataset.label}”课程数据，仅供参考，用于模拟选课、查看冲突与规划学分；适用年级、培养要求和最终课程安排请以对应学校通知及选课系统为准。${planCourseDataNote}`
       : `当前为“${activeDataset.label}”学期模板，尚未载入课程数据；可在“数据管理”中导入本学期课表。培养要求、选课规则和最终课程安排请以对应学校通知及选课系统为准。`;
   const initialCourses = useMemo(
     () =>
@@ -1178,6 +1225,16 @@ export default function CourseExplorer({
     ) {
       setProgramPlanId(storedProgram!);
     }
+    const storedDoctorTrack = window.localStorage.getItem(
+      DOCTOR_TRACK_STORAGE_KEY,
+    );
+    if (
+      storedDoctorTrack === 'general_phd' ||
+      storedDoctorTrack === 'direct_phd' ||
+      storedDoctorTrack === 'combined_phd'
+    ) {
+      setDoctorTrack(storedDoctorTrack);
+    }
     setCustomDatasets(parsedDatasets);
     setCustomProgramPlans(parsedProgramPlans);
     setActiveTermId(nextActiveTerm ?? DEFAULT_TERM_ID);
@@ -1271,7 +1328,7 @@ export default function CourseExplorer({
         ? 'non-degree'
         : designation;
     setDesignationsByTerm((current) => {
-      const termMap = { ...(current[activeTermId] ?? {}) };
+      const termMap = { ...current[activeTermId] };
       // 学位属性按“课程”整体标记：写入 family key，并清理该课程各班次的旧编码键
       const familyKey = designationLookupKey(course);
       const family = courseFamilyKey(course);
@@ -1323,6 +1380,33 @@ export default function CourseExplorer({
       const restoredIds = dataset.courses
         .filter((course) => previousSelectedCodes.has(course.code))
         .map((course) => course.id);
+      // 2027 春季：内置“计划课程”(sp1…)与导入的正式课表课程按
+      // officialCode → canonicalCourseId → 名称匹配升级，避免计划/正式重复显示。
+      const isSpringTarget = dataset.id === '2027-spring';
+      let matchedPlannedCount = 0;
+      if (isSpringTarget) {
+        const plannedById = new Map(
+          springDefaultCourses.map((course) => [course.id, course]),
+        );
+        previousSelectedIds.forEach((oldId) => {
+          const planned = plannedById.get(oldId);
+          if (!planned) return;
+          const official = dataset.courses.find((course) => {
+            if (
+              course.officialCode &&
+              planned.officialCode &&
+              course.officialCode === planned.officialCode
+            ) {
+              return true;
+            }
+            return canonicalCourseId(course) === canonicalCourseId(planned);
+          });
+          if (official && !restoredIds.includes(official.id)) {
+            restoredIds.push(official.id);
+            matchedPlannedCount += 1;
+          }
+        });
+      }
       setUndoSelection(null);
       setSelectionMessage('');
       setCustomDatasets((current) => [
@@ -1336,14 +1420,22 @@ export default function CourseExplorer({
       }));
       clearFilters();
       setDetailCourse(null);
+      const unmatchedCount = previousSelectedIds.filter(
+        (oldId) => !restoredIds.includes(oldId),
+      ).length;
       setDataMessage(
         '已加载“' +
           dataset.label +
           '”的 ' +
           dataset.courses.length +
-          ` 门课程；按课程编码保留了 ${restoredIds.length} 门已选课程。` +
-          (previousSelectedCodes.size > restoredIds.length
-            ? ` ${previousSelectedCodes.size - restoredIds.length} 门课程因编码未匹配而未恢复。`
+          ` 门课程；按课程身份保留了 ${restoredIds.length} 门已选课程。` +
+          (isSpringTarget
+            ? matchedPlannedCount > 0
+              ? ` 其中 ${matchedPlannedCount} 门春季计划课程已与正式课表匹配升级，不再重复显示。`
+              : ' 内置春季计划课程与导入数据按编码/课程名匹配升级，具体以导入课表为准。'
+            : '') +
+          (unmatchedCount > 0
+            ? ` ${unmatchedCount} 门课程因编码/课程身份未匹配而未恢复。`
             : ''),
       );
     } catch (error) {
@@ -1500,6 +1592,15 @@ export default function CourseExplorer({
       window.localStorage.setItem(ACTIVE_PROGRAM_STORAGE_KEY, programPlanId);
   }, [programPlanId, storageReady]);
 
+  useEffect(() => {
+    if (!storageReady) return;
+    if (doctorTrack) {
+      window.localStorage.setItem(DOCTOR_TRACK_STORAGE_KEY, doctorTrack);
+    } else {
+      window.localStorage.removeItem(DOCTOR_TRACK_STORAGE_KEY);
+    }
+  }, [doctorTrack, storageReady]);
+
   const colleges = useMemo(
     () => [...new Set(initialCourses.map((course) => course.college))].sort(),
     [initialCourses],
@@ -1522,10 +1623,11 @@ export default function CourseExplorer({
     PROGRAM_PLANS[0];
   // 选定培养方案后，本专业核心课/专业课（学位课范围内）默认“学位课”：
   // 加入时立即自动标记；切换培养方案/学期时对当前已选补一次默认。仅当未手动设置过属性时生效。
+  // oxlint-disable-next-line react/react-compiler -- 巨型组件本地抑制；规则引擎与规则数据保持确定性
   useEffect(() => {
     if (!storageReady) return;
     setDesignationsByTerm((current) => {
-      const termMap = { ...(current[activeTermId] ?? {}) };
+      const termMap = { ...current[activeTermId] };
       let changed = false;
       for (const course of initialCourses) {
         if (!selectedIds.includes(course.id)) continue;
@@ -1546,32 +1648,71 @@ export default function CourseExplorer({
       }
       return changed ? { ...current, [activeTermId]: termMap } : current;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅需在方案/学期/数据就绪变化时补默认
-  }, [activeTermId, programPlanId, storageReady]);
+  }, [
+    activeTermId,
+    activePlan,
+    initialCourses,
+    programPlanId,
+    selectedIds,
+    storageReady,
+  ]);
+  // 英语免修免考 = 直接记为“已获得/已修得”学分，不进入任何学期的“预选课程学分”。
+  // 做法：合成一条“硕士学位英语 3 学分（2026 秋季已获得）”的历史记录参与培养统计；
+  // 已手动录入过英语历史成绩时不重复合成。
+  const syntheticExemptionHistory = useMemo(() => {
+    if (englishExemptionStatus !== 'approved') return null;
+    const hasEnglishHistory = historicalRecords.some(
+      (record) =>
+        record.credits > 0 && /050200MB001/i.test(record.courseCode),
+    );
+    if (hasEnglishHistory) return null;
+    const record: HistoricalRecord = {
+      id: 'exemption-earned',
+      term: '2026—2027学年(秋)第一学期',
+      courseName: '硕士学位英语',
+      courseCode: '280216050200MB001',
+      credits: 3,
+      category: '公共必修课',
+      subject: '外国语言文学',
+      designation: 'degree',
+      module: 'regular',
+      hours: 0,
+      courseCount: 1,
+      source: '英语免修免考·已获得学分（自动计入，不可删除）',
+    };
+    return record;
+  }, [englishExemptionStatus, historicalRecords]);
+  const exemptionHistory = useMemo(
+    () =>
+      syntheticExemptionHistory
+        ? [...historicalRecords, syntheticExemptionHistory]
+        : historicalRecords,
+    [historicalRecords, syntheticExemptionHistory],
+  );
+  const exemptionEarnedCredits = syntheticExemptionHistory?.credits ?? 0;
+  const englishQualificationDetail =
+    englishExemptionStatus === 'approved'
+      ? exemptionEarnedCredits > 0
+        ? '已获得资格：硕士学位英语免修免考 3 学分按“2026 秋季学期已获得学分”计入历史已修，不计入任何学期的预选课程学分。'
+        : '已获得资格；历史英语课程已计入，免修免考学分不重复累计。'
+      : '未计入英语免修免考学分，公共必修学位课不增加免修免考的 3 学分。';
   const creditSummary = useMemo(
     () =>
       calculateCreditSummary({
         selectedCourses,
         designations: activeDesignations,
-        historicalRecords,
+        historicalRecords: exemptionHistory,
         exemptionStatus: englishExemptionStatus,
         plan: activePlan,
       }),
     [
       activeDesignations,
       englishExemptionStatus,
-      historicalRecords,
+      exemptionHistory,
       selectedCourses,
       activePlan,
     ],
   );
-  const englishQualificationCredits = creditSummary.approvedExemptionCredits;
-  const englishQualificationDetail =
-    englishExemptionStatus === 'approved'
-      ? englishQualificationCredits > 0
-        ? `已计入公共必修学位课 +${formatCredits(englishQualificationCredits)} 学分，培养要求统计已同步。`
-        : '已获得资格；历史英语课程已计入，免修免考学分不重复累计。'
-      : '未计入英语免修免考学分，公共必修学位课不增加免修免考的 3 学分。';
   const hiasHistorySummary = useMemo(() => {
     const records = historicalRecords.filter(
       (record) => record.module === 'hias',
@@ -1612,6 +1753,134 @@ export default function CourseExplorer({
         !historicalCourseCodes.has(course.code.trim()),
     );
   }, [englishExemptionStatus, historicalRecords, selectedCourses]);
+
+  // ---- 跨学期培养进度：所有学期的选课都计入（前序 + 当前 + 已规划的后续学期）----
+  // 培养方案进度看“所有学期的选课数”：本学季只是“当学期”视图（预选学分/10分门槛/冲突/课表
+  // 仍只看当学期），但“分类学分/学位课门数/缺口/预计累计”聚合全部学期已选课程。
+  // 历史记录与英语免修的口径与本学期一致；同课程跨学期只保留一份。
+  const otherTermContext = useMemo(() => {
+    const activeIndex = availableDatasets.findIndex(
+      (dataset) => dataset.id === activeTermId,
+    );
+    const courses: Course[] = [];
+    const records: HistoricalRecord[] = [];
+    if (activeIndex < 0) return { courses, records };
+    const historicalCourseCodes = new Set(
+      historicalRecords
+        .map((record) => record.courseCode.trim())
+        .filter(Boolean),
+    );
+    const currentKeys = new Set(
+      countedSelectedCourses.map((course) => canonicalCourseId(course)),
+    );
+    const seen = new Set<string>();
+    for (let index = 0; index < availableDatasets.length; index += 1) {
+      if (index === activeIndex) continue; // 当前学期由 countedSelectedCourses 统计
+      const dataset = availableDatasets[index];
+      const ids = selectedByTerm[dataset.id] ?? [];
+      if (!ids.length) continue;
+      const termDesignations = designationsByTerm[dataset.id] ?? {};
+      for (const course of dataset.courses) {
+        if (!ids.includes(course.id)) continue;
+        if (
+          englishExemptionStatus === 'approved' &&
+          isEnglishCourse(course)
+        ) {
+          continue;
+        }
+        if (historicalCourseCodes.has(course.code.trim())) continue;
+        const key = canonicalCourseId(course);
+        // 与当前学期（或其它学期）同课程只保留一份，避免跨学期重复累计
+        if (currentKeys.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        courses.push(course);
+        records.push({
+          id: `carried-${course.id}`,
+          term: dataset.label,
+          courseName: course.name,
+          courseCode: course.code,
+          credits: course.credits,
+          category: course.category,
+          subject: course.subject,
+          designation: getCourseDesignation(course, termDesignations, activePlan),
+          module: getCourseModule({ code: course.code, name: course.name }),
+          courseCount: 1,
+          source: '自动带入·其它学期已选（以实际成绩为准）',
+        });
+      }
+    }
+    return { courses, records };
+  }, [
+    activePlan,
+    availableDatasets,
+    activeTermId,
+    countedSelectedCourses,
+    designationsByTerm,
+    englishExemptionStatus,
+    historicalRecords,
+    selectedByTerm,
+  ]);
+  const carriedTermCourses = otherTermContext.courses;
+  const carriedHistoryRecords = otherTermContext.records;
+  const carriedCourseCredits = carriedTermCourses.reduce(
+    (sum, course) => sum + course.credits,
+    0,
+  );
+
+  // 培养进度统计集合 = 其它学期已选（前序/后续，全部跨学期）+ 本学期已选（历史记录由 credit-model 内部并入）
+  const programCourses = useMemo(
+    () => [...carriedTermCourses, ...countedSelectedCourses],
+    [carriedTermCourses, countedSelectedCourses],
+  );
+  // 培养进度的学位属性 = 全部学期的属性合并（当前学期最后覆盖）
+  const programDesignations = useMemo(() => {
+    const activeIndex = availableDatasets.findIndex(
+      (dataset) => dataset.id === activeTermId,
+    );
+    const merged: Record<string, CourseDesignation> = {};
+    for (let index = 0; index < availableDatasets.length; index += 1) {
+      if (index === activeIndex) continue;
+      Object.assign(merged, designationsByTerm[availableDatasets[index].id] ?? {});
+    }
+    Object.assign(merged, activeDesignations);
+    return merged;
+  }, [
+    activeDesignations,
+    availableDatasets,
+    activeTermId,
+    designationsByTerm,
+  ]);
+  /** 培养进度版学分统计（前序+本学期+历史+免修已获得），用于“培养要求/学位课门数/缺口引擎”。 */
+  const programCreditSummary = useMemo(
+    () =>
+      calculateCreditSummary({
+        selectedCourses: programCourses,
+        designations: programDesignations,
+        historicalRecords: exemptionHistory,
+        exemptionStatus: englishExemptionStatus,
+        plan: activePlan,
+      }),
+    [
+      activePlan,
+      englishExemptionStatus,
+      exemptionHistory,
+      programCourses,
+      programDesignations,
+    ],
+  );
+  /** 培养进度版核心/专业学位课门数统计。 */
+  const programPlanCourseCounts = useMemo(
+    () =>
+      getPlanCourseCounts({
+        courses: programCourses,
+        plan: activePlan,
+        designations: programDesignations,
+        historicalRecords: exemptionHistory,
+      }),
+    [activePlan, exemptionHistory, programCourses, programDesignations],
+  );
+  // 当学期“预选”方案学分合计：免修免考的 3 学分不进入任何学期的预选学分
+  // （它已作为“已获得/历史已修”计入，见 exemptionHistory）。
   const selectedCredits = creditSummary.selectionCredits;
   const selectedCreditBreakdown = useMemo(() => {
     const totals = new Map<string, number>();
@@ -1621,36 +1890,28 @@ export default function CourseExplorer({
         (totals.get(course.category) ?? 0) + course.credits,
       );
     });
-    if (englishQualificationCredits > 0) {
-      totals.set(
-        '公共必修课',
-        (totals.get('公共必修课') ?? 0) + englishQualificationCredits,
-      );
-    }
     return [...totals.entries()].sort((left, right) => right[1] - left[1]);
-  }, [countedSelectedCourses, englishQualificationCredits]);
+  }, [countedSelectedCourses]);
   const selectedRequirementBreakdown = useMemo(() => {
     const totals = new Map<CourseRequirementType, number>();
     countedSelectedCourses.forEach((course) => {
-      const requirementType = courseRequirementType(course);
+      const designation = getCourseDesignation(
+        course,
+        activeDesignations,
+        activePlan,
+      );
+      const requirementType = getCourseRequirementType(
+        course,
+        designation,
+        activePlan,
+      );
       totals.set(
         requirementType,
         (totals.get(requirementType) ?? 0) + course.credits,
       );
     });
-    if (englishQualificationCredits > 0) {
-      totals.set(
-        'publicRequiredDegree',
-        (totals.get('publicRequiredDegree') ?? 0) + englishQualificationCredits,
-      );
-    }
     return [...totals.entries()].sort((left, right) => right[1] - left[1]);
-  }, [
-    countedSelectedCourses,
-    activeDesignations,
-    activePlan,
-    englishQualificationCredits,
-  ]);
+  }, [countedSelectedCourses, activeDesignations, activePlan]);
   const planCoreCourses = useMemo(
     () =>
       initialCourses.filter((course) =>
@@ -1664,16 +1925,6 @@ export default function CourseExplorer({
         activePlan.professionalCourses.includes(course.name),
       ),
     [activePlan, initialCourses],
-  );
-  const planCourseCounts = useMemo(
-    () =>
-      getPlanCourseCounts({
-        courses: countedSelectedCourses,
-        plan: activePlan,
-        designations: activeDesignations,
-        historicalRecords,
-      }),
-    [activeDesignations, activePlan, countedSelectedCourses, historicalRecords],
   );
   const selectedPlanCoreCount = countedSelectedCourses.filter((course) =>
     activePlan.coreCourses.includes(course.name),
@@ -1741,15 +1992,13 @@ export default function CourseExplorer({
   const semesterEligibleCredits = countedSelectedCourses
     .filter(countsTowardSemesterMinimum)
     .reduce((sum, course) => sum + course.credits, 0);
-  const semesterCreditGap =
-    semesterMinimumTarget === null
-      ? 0
-      : Math.max(0, semesterMinimumTarget - semesterEligibleCredits);
   const selectedSportsCourses = countedSelectedCourses.filter(
     (course) => course.subject === '体育学',
   );
-  const selectedDegreeCoreCount = planCourseCounts.coreCount;
-  const selectedDegreeProfessionalCount = planCourseCounts.professionalCount;
+  // 学位课门数（培养进度口径 = 所有学期已选，含前序、当前与后续 + 历史）
+  const selectedDegreeCoreCount = programPlanCourseCounts.coreCount;
+  const selectedDegreeProfessionalCount =
+    programPlanCourseCounts.professionalCount;
   const unsetDesignationCount = countedSelectedCourses.filter(
     (course) =>
       getCourseDesignation(course, activeDesignations, activePlan) === 'unset',
@@ -1791,6 +2040,7 @@ export default function CourseExplorer({
           course.name,
           course.englishName,
           course.code,
+          course.officialCode ?? '',
           course.teacher,
           course.college,
           course.subject,
@@ -1839,212 +2089,227 @@ export default function CourseExplorer({
     selectedCourses,
   ]);
 
-  const requirementGaps = useMemo(() => {
-    return {
-      publicRequiredDegree: Math.max(
-        0,
-        (publicRequiredDegreeTarget ?? 0) -
-          creditSummary.publicRequiredDegreeCredits,
-      ),
-      publicRequiredNonDegree: Math.max(
-        0,
-        (publicRequiredNonDegreeTarget ?? 0) -
-          creditSummary.publicRequiredNonDegreeCredits,
-      ),
-      degreeCredits: Math.max(
-        0,
-        activePlan.degreeCourseCredits -
-          creditSummary.professionalDegreeCredits,
-      ),
-      nonDegreeCredits: Math.max(
-        0,
-        (activePlan.professionalNonDegreeCredits ?? 0) -
-          creditSummary.professionalElectiveCredits,
-      ),
-      publicElective: Math.max(
-        0,
-        publicElectiveTarget - creditSummary.publicElectiveCredits,
-      ),
-      innovation: Math.max(
-        0,
-        (activePlan.innovationCredits ?? 0) - creditSummary.innovationCredits,
-      ),
-      coreCount: Math.max(0, activePlan.coreMinimum - selectedDegreeCoreCount),
-      professionalCount: Math.max(
-        0,
-        activePlan.professionalMinimum - selectedDegreeProfessionalCount,
-      ),
-    };
-  }, [
-    activePlan,
-    creditSummary,
-    publicRequiredDegreeTarget,
-    publicRequiredNonDegreeTarget,
-    publicElectiveTarget,
-    selectedDegreeCoreCount,
-    selectedDegreeProfessionalCount,
-  ]);
-
-  const recommendationCandidates = useMemo(() => {
-    if (!selectedCourses.length) return [];
-    const candidates = initialCourses
-      .filter((course) => !selectedIds.includes(course.id))
-      .filter((course) =>
-        selectedCourses.every((selected) => !coursesConflict(course, selected)),
-      )
-      .filter((course) =>
-        selectedCourses.every(
-          (selected) => courseFamilyKey(selected) !== courseFamilyKey(course),
-        ),
-      )
-      .filter(
-        (course) =>
-          course.subject !== '体育学' || selectedSportsCourses.length === 0,
-      )
-      .map((course) => {
-        const reasons: string[] = [];
-        const requirementType = getCourseRequirementType(
-          course,
-          getCourseDesignation(course, {}, activePlan),
-          activePlan,
-        );
-        // 学位课 2+2 范围判定：学术型 = 本一级学科/所属二级学科范围内的核心/专业类课程；
-        // 专硕 = 仅限本专业培养方案列出的核心课/专业课（均由 getDegreeEligibility 控制）。
-        const degreeEligibility = getDegreeEligibility(course, activePlan);
-        const inDegreeScope = degreeEligibility.status === 'eligible';
-        const inCore = inDegreeScope && isCoreDegreeType(course);
-        const inProfessional =
-          inDegreeScope && isProfessionalDegreeType(course);
-        const degreeGapOpen =
-          requirementGaps.coreCount > 0 ||
-          requirementGaps.professionalCount > 0 ||
-          requirementGaps.degreeCredits > 0;
-        const fillsDegree =
-          (inCore || inProfessional) && degreeGapOpen;
-        if (semesterCreditGap > 0 && countsTowardSemesterMinimum(course)) {
-          reasons.push(
-            `可补本学期有效选课学分缺口 ${formatCredits(semesterCreditGap)} 学分（秋季/春季目标不少于 10 学分）`,
-          );
-        }
-        if (
-          requirementGaps.publicRequiredDegree > 0 &&
-          requirementType === 'publicRequiredDegree'
-        ) {
-          reasons.push(
-            `可补公共必修学位课 ${formatCredits(requirementGaps.publicRequiredDegree)} 学分缺口`,
-          );
-        }
-        if (
-          requirementGaps.publicRequiredNonDegree > 0 &&
-          requirementType === 'publicRequiredNonDegree'
-        ) {
-          reasons.push(
-            `可补公共必修非学位课 ${formatCredits(requirementGaps.publicRequiredNonDegree)} 学分缺口`,
-          );
-        }
-        if (requirementGaps.innovation > 0 && isInnovationCourse(course)) {
-          reasons.push(
-            '可补创新创业模块；该学分同时属于公共选修归属，不重复累计',
-          );
-        } else if (
-          requirementGaps.publicElective > 0 &&
-          requirementType === 'publicElective' &&
-          !isInnovationCourse(course)
-        ) {
-          reasons.push(
-            `可补公共选修 ${formatCredits(requirementGaps.publicElective)} 学分缺口`,
-          );
-        }
-        if (
-          (requirementGaps.coreCount > 0 ||
-            requirementGaps.degreeCredits > 0) &&
-          inCore
-        ) {
-          reasons.push(
-            `培养方案核心课候选（学位课 2 门核心未满）；核心课门数还差 ${requirementGaps.coreCount} 门，加入后需设为“学位课”`,
-          );
-        }
-        if (
-          (requirementGaps.professionalCount > 0 ||
-            requirementGaps.degreeCredits > 0) &&
-          inProfessional
-        ) {
-          reasons.push(
-            `培养方案专业课候选（学位课 2 门专业未满）；专业课门数还差 ${requirementGaps.professionalCount} 门，加入后需设为“学位课”`,
-          );
-        }
-        if (
-          requirementGaps.nonDegreeCredits > 0 &&
-          requirementType === 'professionalElective'
-        ) {
-          reasons.push('只能作为非学位课，可补专业选修课缺口');
-        }
-        if (
-          requirementGaps.coreCount === 0 &&
-          requirementGaps.professionalCount === 0 &&
-          requirementGaps.degreeCredits === 0 &&
-          requirementGaps.publicRequiredDegree === 0 &&
-          requirementGaps.publicRequiredNonDegree === 0 &&
-          requirementGaps.publicElective === 0 &&
-          requirementGaps.innovation === 0 &&
-          course.subject === '体育学' &&
-          selectedSportsCourses.length === 0
-        ) {
-          reasons.push('体育类公共选修每学期限选一门；当前可作为互斥备选');
-        }
-        return {
-          course,
-          reasons,
-          degreeKind: inCore ? 'core' : inProfessional ? 'professional' : null,
-          fillsDegree,
-        };
-      })
-      .filter((item) => item.reasons.length > 0)
-      .sort(
-        (left, right) =>
-          Number(right.fillsDegree) - Number(left.fillsDegree) ||
-          right.reasons.length - left.reasons.length,
-      );
-    const seenCourseFamilies = new Set<string>();
-    const uniqueCandidates = candidates.filter(({ course }) => {
-      const family = courseFamilyKey(course);
-      if (seenCourseFamilies.has(family)) return false;
-      seenCourseFamilies.add(family);
-      return true;
+  const springPlannedCourseNames = useMemo(
+    () =>
+      springDefaultCourses
+        .filter(
+          (course) =>
+            course.semesterNote === 'spring' || course.semesterNote === 'both',
+        )
+        .map((course) => course.name),
+    [],
+  );
+  const isDoctorPlan = /博士/.test(activePlan.degree);
+  // 博士培养类型：直博/硕博连读与普博口径不同；旧用户无记录时默认直博口径并展示说明
+  const effectiveTrack = isDoctorPlan
+    ? doctorTrack ?? 'direct_phd'
+    : undefined;
+  const learnedCourseNames = useMemo(() => {
+    const names = new Set<string>();
+    // 所有学期已选课程都视为已规划/已修读（成绩以实际为准），参与培养进度与后续规划
+    programCourses.forEach((course) =>
+      names.add(courseBaseName(course.name)),
+    );
+    exemptionHistory.forEach((record) => {
+      if (record.courseName) names.add(courseBaseName(record.courseName));
     });
-    return uniqueCandidates.slice(0, 6);
+    return [...names];
+  }, [exemptionHistory, programCourses]);
+  /** 同一门课程被选入多个班次的“多余班次数”。 */
+  const extraSectionCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    selectedCourses.forEach((course) => {
+      const key = canonicalCourseId(course);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return [...counts.values()].reduce(
+      (sum, count) => sum + Math.max(0, count - 1),
+      0,
+    );
+  }, [selectedCourses]);
+  /** 已确认（degree + eligible）学位课课程名（培养进度口径，特殊规则/体检/推荐同源）。 */
+  const confirmedDegreeNames = useMemo(
+    () =>
+      collectConfirmedDegreeNames(
+        programCourses,
+        exemptionHistory,
+        activePlan,
+        programDesignations,
+      ),
+    [activePlan, exemptionHistory, programCourses, programDesignations],
+  );
+  const pendingDegreeNames = useMemo(() => {
+    const approval: string[] = [];
+    const verification: string[] = [];
+    countedSelectedCourses.forEach((course) => {
+      if (getCourseDesignation(course, activeDesignations, activePlan) !== 'degree') {
+        return;
+      }
+      const status = getDegreeEligibility(course, activePlan).status;
+      if (status === 'approval_required') approval.push(course.name);
+      if (status === 'verification') verification.push(course.name);
+    });
+    return { approval, verification };
+  }, [activeDesignations, activePlan, countedSelectedCourses]);
+  /** 方案体检：红=本学期必须处理；黄/绿=培养进度；琥珀=待确认（与推荐共用缺口引擎）。 */
+  const semesterCheckup = useMemo<SemesterCheckup>(
+    () =>
+      calculateSemesterCheckup({
+        plan: activePlan,
+        track: effectiveTrack,
+        summary: {
+          publicRequiredDegreeCredits:
+            programCreditSummary.publicRequiredDegreeCredits,
+          publicRequiredNonDegreeCredits:
+            programCreditSummary.publicRequiredNonDegreeCredits,
+          professionalDegreeCredits:
+            programCreditSummary.professionalDegreeCredits,
+          professionalElectiveCredits:
+            programCreditSummary.professionalElectiveCredits,
+          publicElectiveCredits: programCreditSummary.publicElectiveCredits,
+          innovationCredits: programCreditSummary.innovationCredits,
+        },
+        courseCounts: {
+          coreCount: selectedDegreeCoreCount,
+          professionalCount: selectedDegreeProfessionalCount,
+        },
+        confirmedDegreeNames,
+        effectiveCredits: semesterEligibleCredits,
+        semesterTarget: semesterMinimumTarget,
+        springPlannedCourseNames,
+        termId: activeTermId,
+        conflictsCount: conflictPairs.length,
+        duplicateSectionCount: extraSectionCount,
+        sportsCourseCount: selectedSportsCourses.length,
+        approvalRequiredNames: pendingDegreeNames.approval,
+        verificationNames: pendingDegreeNames.verification,
+        fallLearnedNames: learnedCourseNames,
+      }),
+    [
+      activePlan,
+      activeTermId,
+      confirmedDegreeNames,
+      conflictPairs.length,
+      programCreditSummary,
+      effectiveTrack,
+      extraSectionCount,
+      learnedCourseNames,
+      pendingDegreeNames.approval,
+      pendingDegreeNames.verification,
+      selectedDegreeCoreCount,
+      selectedDegreeProfessionalCount,
+      selectedSportsCourses.length,
+      semesterEligibleCredits,
+      semesterMinimumTarget,
+      springPlannedCourseNames,
+    ],
+  );
+
+  /**
+   * 智能补全方案（旧“补充建议”入口保留，改为可生成 2~3 个完整方案）。
+   * 惰性计算：仅在打开补全方案对话框时运行，避免每次渲染/每次英语免修等设置改动都
+   * 同步执行完整推荐引擎造成卡顿。
+   */
+  const smartRecommendation = useMemo<RecommendationResult | null>(() => {
+    if (!recommendationDialogOpen) return null;
+    if (!selectedCourses.length) return null;
+    // 培养进度口径包含其它学期已选与英语免修“已获得”：推荐缺口、学期课程去重与投影都要考虑
+    const historyForProgram = [
+      ...exemptionHistory,
+      ...carriedHistoryRecords,
+    ];
+    const candidates = buildCandidates({
+      termId: activeTermId,
+      courses: initialCourses,
+      selectedCourses,
+      selectedIds,
+      plan: activePlan,
+      track: effectiveTrack,
+      historicalRecords: historyForProgram,
+      designations: activeDesignations,
+      exemptionStatus: englishExemptionStatus,
+      semesterTarget: semesterMinimumTarget,
+      springPlannedCourseNames,
+    });
+    if (!candidates.length) {
+      return { candidates, plans: [] };
+    }
+    return generateRecommendationPlans(
+      {
+        termId: activeTermId,
+        courses: initialCourses,
+        selectedCourses,
+        selectedIds,
+        plan: activePlan,
+        track: effectiveTrack,
+        historicalRecords: historyForProgram,
+        designations: activeDesignations,
+        exemptionStatus: englishExemptionStatus,
+        semesterTarget: semesterMinimumTarget,
+        springPlannedCourseNames,
+      },
+      candidates,
+    );
   }, [
+    activeDesignations,
     activePlan,
+    activeTermId,
+    carriedHistoryRecords,
+    effectiveTrack,
+    englishExemptionStatus,
+    exemptionHistory,
     initialCourses,
-    publicElectiveTarget,
-    requirementGaps,
-    semesterCreditGap,
+    recommendationDialogOpen,
     selectedCourses,
     selectedIds,
-    selectedSportsCourses.length,
+    semesterMinimumTarget,
+    springPlannedCourseNames,
   ]);
+  const smartPlans = smartRecommendation?.plans ?? [];
 
-  const recommendationCombination = useMemo(() => {
-    const combination: Course[] = [];
-    let combinationCredits = 0;
-    for (const item of recommendationCandidates) {
-      if (
-        combination.some(
-          (course) => courseFamilyKey(course) === courseFamilyKey(item.course),
-        ) ||
-        combination.some((course) => coursesConflict(course, item.course))
-      ) {
-        continue;
+  /** 智能补全方案：把某一推荐方案应用到当前课表（默认保留已选课程）。 */
+  function applyGeneratedPlan(plan: GeneratedPlan) {
+    rememberSelection();
+    const additions = plan.additions;
+    const newIds = [...selectedIds];
+    additions.forEach((addition) => {
+      if (!newIds.includes(addition.course.id)) newIds.push(addition.course.id);
+    });
+    // 学位属性：按加入课表的自动规则设置（eligible 核心/专业课 → degree，强制非学位 → non-degree）
+    const designationsNext = { ...activeDesignations };
+    additions.forEach((addition) => {
+      const course = addition.course;
+      const autoDesignation =
+        getCourseDesignation(course, {}, activePlan) === 'non-degree'
+          ? 'non-degree'
+          : (isCoreDegreeType(course) || isProfessionalDegreeType(course)) &&
+              getDegreeEligibility(course, activePlan).status === 'eligible'
+            ? 'degree'
+            : null;
+      if (autoDesignation) {
+        const key = designationLookupKey(course);
+        if (designationsNext[key] === undefined) {
+          designationsNext[key] = autoDesignation;
+        }
       }
-      combination.push(item.course);
-      combinationCredits += item.course.credits;
-      if (combination.length === 4) break;
-      if (semesterCreditGap > 0 && combinationCredits >= semesterCreditGap) {
-        break;
-      }
-    }
-    return combination;
-  }, [recommendationCandidates, semesterCreditGap]);
+    });
+    setDesignationsByTerm((current) => ({
+      ...current,
+      [activeTermId]: designationsNext,
+    }));
+    setSelectedIdsForActive(newIds);
+    setApplyPlan(null);
+    setRecommendationDialogOpen(false);
+    setSelectionMessage(
+      `已应用「${plan.name}」：新增 ${additions.length} 门课程。` +
+        (plan.notes.length ? ` ${plan.notes.join(' ')}` : ''),
+    );
+  }
+
+  function openRecommendationDialog() {
+    setApplyPlan(null);
+    setRecommendationDialogOpen(true);
+  }
 
   function toggleCourse(id: string) {
     const course = initialCourses.find((item) => item.id === id);
@@ -2175,7 +2440,7 @@ export default function CourseExplorer({
           ? 'non-degree'
           : designation;
       setDesignationsByTerm((current) => {
-        const next = { ...(current[activeTermId] ?? {}) };
+        const next = { ...current[activeTermId] };
         // 同一门课不同班级仍用同一 family key，换班后学位属性自动延续；
         // 顺带清理两门课各班次的旧编码键。
         initialCourses
@@ -2492,7 +2757,7 @@ export default function CourseExplorer({
     setHiasDraft((current) => ({ term: current.term, attendanceCount: '' }));
     setDataManagementError('');
     setDataManagementMessage(
-      `已加入 ${attendanceCount} 次 HIAS 讲堂（${hours} 学时，${formatCredits(credits)} 学分），归入专业非学位课。`,
+      `已加入 ${attendanceCount} 次 HIAS 讲堂（${hours} 学时，${formatCredits(credits)} 学分），归入专业非学位课（专业选修，非学位；不计入学期 10 学分门槛与公共选修体系）。`,
     );
   }
 
@@ -2577,11 +2842,7 @@ export default function CourseExplorer({
               className="header-selection"
               onClick={showSelectedCourses}
               aria-label={`查看已选 ${selectedCourses.length} 门课程，方案合计 ${formatCredits(selectedCredits)} 学分`}
-              title={
-                englishQualificationCredits > 0
-                  ? `查看已选课程，合计含英语免修免考 ${formatCredits(englishQualificationCredits)} 学分`
-                  : '查看已选课程'
-              }
+              title={'查看已选课程（预选学分不含英语免修免考；免修学分计入“历史已修/已获得”）'}
             >
               <span className="header-selection-icon" aria-hidden="true">
                 <Star />
@@ -2763,7 +3024,9 @@ export default function CourseExplorer({
                       <div className="section-description">
                         {onlySelected
                           ? '查看已选安排，点击课程名称核对详情。'
-                          : '按课程、教师或上课时间查找，加入你的模拟课表。'}
+                          : isSpringTerm
+                            ? '春季计划课程：依据 2026—2027 培养方案整理，时间/班次/容量待春季正式课表公布。'
+                            : '按课程、教师或上课时间查找，加入你的模拟课表。'}
                       </div>
                     </div>
                     <p className="text-sm text-slate-500">
@@ -2946,13 +3209,13 @@ export default function CourseExplorer({
                         <Download />
                         导出 CSV
                       </Button>
-                      {recommendationCandidates.length > 0 && (
+                      {selectedCourses.length > 0 && (
                         <Button
                           variant="outline"
-                          onClick={() => setRecommendationDialogOpen(true)}
+                          onClick={openRecommendationDialog}
                         >
                           <Sparkles />
-                          补充建议
+                          智能补全方案
                         </Button>
                       )}
                       <Button
@@ -3022,6 +3285,15 @@ export default function CourseExplorer({
                               ) : null}
                               {isInnovationCourse(course) && (
                                 <Badge variant="secondary">创新创业</Badge>
+                              )}
+                              {course.scheduleStatus === 'planned' && (
+                                <Badge
+                                  className="bg-teal-50 text-teal-700"
+                                  variant="secondary"
+                                  title="依据2026—2027培养方案整理的春季计划课程，具体以春季正式课表为准"
+                                >
+                                  春季计划
+                                </Badge>
                               )}
                               {selected && (
                                 <Badge variant="secondary">
@@ -3448,13 +3720,27 @@ export default function CourseExplorer({
                               ))}
                             </div>
                           )}
+                          {syntheticExemptionHistory && (
+                            <div className="history-record-list mt-2">
+                              <div className="text-amber-700">
+                                <span>
+                                  硕士学位英语 · 2026—2027学年(秋)第一学期
+                                  （英语免修免考 · 自动计入，不可删除）
+                                </span>
+                                <b>
+                                  {formatCredits(syntheticExemptionHistory.credits)}{' '}
+                                  学分
+                                </b>
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                           <div className="flex items-center justify-between gap-2">
                             <h4 className="text-sm font-semibold text-slate-700">
                               HIAS 讲堂
                             </h4>
-                            <Badge variant="secondary">专业非学位课</Badge>
+                            <Badge variant="secondary">专业非学位课（专业选修）</Badge>
                           </div>
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <NativeSelect
@@ -3587,7 +3873,7 @@ export default function CourseExplorer({
                       <div>
                         <span>加入计划后预计累计</span>
                         <strong>
-                          {formatCredits(creditSummary.estimatedCredits)}
+                          {formatCredits(programCreditSummary.estimatedCredits)}
                           <small>学分</small>
                         </strong>
                       </div>
@@ -3598,7 +3884,7 @@ export default function CourseExplorer({
                             Math.max(
                               0,
                               activePlan.totalCredits -
-                                creditSummary.estimatedCredits,
+                                programCreditSummary.estimatedCredits,
                             ),
                           )}
                           <small>学分</small>
@@ -3618,12 +3904,14 @@ export default function CourseExplorer({
                           {formatCredits(creditSummary.plannedCredits)} 学分
                         </strong>
                       </div>
-                      <div>
-                        <span>英语免修免考</span>
-                        <strong>
-                          +{formatCredits(englishQualificationCredits)} 学分
-                        </strong>
-                      </div>
+                      {carriedCourseCredits > 0 && (
+                        <div>
+                          <span>其它学期已选（计入培养进度）</span>
+                          <strong>
+                            {formatCredits(carriedCourseCredits)} 学分
+                          </strong>
+                        </div>
+                      )}
                       <a href="#guide-pending">
                         <span>待确认学位属性</span>
                         <strong>
@@ -3650,7 +3938,8 @@ export default function CourseExplorer({
                       </button>
                     </div>
                     <p className="program-summary-note">
-                      预计累计包含预选课程，毕业仍需分别满足下方分类学分与学位课门数要求，以学校最终审核为准。
+                      预计累计包含历史已修、其它学期已选（跨学期自动计入培养进度，成绩以实际为准）、本学期预选与英语免修免考；
+                      毕业仍需分别满足下方分类学分与学位课门数要求，以学校最终审核为准。
                     </p>
                   </div>
                   {(programPlanMessage || programPlanError) && (
@@ -3666,53 +3955,222 @@ export default function CourseExplorer({
                     </div>
                   )}
 
+                  {isSpringTerm && (
+                    <div className="mb-4 flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-sm leading-6 text-teal-800">
+                      <Info className="mt-0.5 size-4 shrink-0" />
+                      <span>
+                        当前为春季学期：本页课程为<strong>春季计划课程</strong>（依据
+                        2026—2027 培养方案整理），课程时间、班次、容量与最终开设情况以春季正式课表及教务系统为准。
+                      </span>
+                    </div>
+                  )}
+
+                  {semesterCheckup.mustFix.length > 0 && (
+                    <section
+                      aria-label="本学期必须处理"
+                      className="mb-4 rounded-2xl border border-rose-200 bg-rose-50/70 p-4"
+                    >
+                      <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-rose-800">
+                        <TriangleAlert className="size-4" />
+                        本学期必须处理（{semesterCheckup.mustFix.length}）
+                      </h3>
+                      <div className="space-y-2">
+                        {semesterCheckup.mustFix.map((issue) => (
+                          <div
+                            className="rounded-xl border border-rose-200 bg-white px-3 py-2"
+                            key={issue.id}
+                          >
+                            <p className="text-sm font-semibold text-rose-800">
+                              {issue.title}
+                            </p>
+                            <p className="mt-0.5 text-xs leading-5 text-rose-700">
+                              {issue.detail}
+                            </p>
+                            {issue.action && (
+                              <p className="mt-1 text-xs leading-5 text-rose-600">
+                                {issue.action}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {semesterCheckup.pending.length > 0 && (
+                    <section
+                      aria-label="待确认事项"
+                      className="mb-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4"
+                    >
+                      <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-amber-800">
+                        <ClipboardCheck className="size-4" />
+                        待确认事项（{semesterCheckup.pending.length}）
+                      </h3>
+                      <div className="space-y-2">
+                        {semesterCheckup.pending.map((issue) => (
+                          <div
+                            className="rounded-xl border border-amber-200 bg-white px-3 py-2"
+                            key={issue.id}
+                          >
+                            <p className="text-sm font-semibold text-amber-800">
+                              {issue.title}
+                            </p>
+                            <p className="mt-0.5 text-xs leading-5 text-amber-700">
+                              {issue.detail}
+                            </p>
+                            {issue.action && (
+                              <p className="mt-1 text-xs leading-5 text-amber-700">
+                                {issue.action}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {semesterCheckup.progress.some(
+                    (issue) => issue.tone === 'amber' || issue.tone === 'slate',
+                  ) && (
+                    <section
+                      aria-label="培养方案进度提醒"
+                      className="mb-4 rounded-2xl border border-slate-200 bg-white p-4"
+                    >
+                      <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                        <Target className="size-4 text-amber-600" />
+                        培养方案进度提醒（非本学期选课错误）
+                      </h3>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="size-2.5 rounded-full bg-amber-400" />
+                          琥珀色卡片 = 培养方案尚未完成（可后续学期/可留待春季）
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="size-2.5 rounded-full border border-dashed border-slate-400 bg-white" />
+                          灰色虚线卡片 = 材料未明确最低值（待核验，不判为错误）
+                        </span>
+                        <span>红色项目只出现在上方“本学期必须处理”，需本学期处理。</span>
+                      </div>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {semesterCheckup.progress
+                          .filter(
+                            (issue) =>
+                              issue.tone === 'amber' || issue.tone === 'slate',
+                          )
+                          .map((issue) => {
+                            const isPending = issue.tone === 'slate';
+                            return (
+                              <div
+                                className={
+                                  isPending
+                                    ? 'rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2'
+                                    : 'rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2'
+                                }
+                                key={issue.id}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <p
+                                    className={
+                                      'text-sm font-semibold ' +
+                                      (isPending
+                                        ? 'text-slate-600'
+                                        : 'text-amber-900')
+                                    }
+                                  >
+                                    {issue.title}
+                                  </p>
+                                  {issue.counted !== undefined &&
+                                    issue.target !== null && (
+                                      <Badge
+                                        className={
+                                          'shrink-0 ' +
+                                          (isPending
+                                            ? ''
+                                            : 'border-amber-300 bg-amber-100 text-amber-800')
+                                        }
+                                        variant={isPending ? 'secondary' : 'outline'}
+                                      >
+                                        {issue.counted} / {issue.target}
+                                      </Badge>
+                                    )}
+                                </div>
+                                <p
+                                  className={
+                                    'mt-0.5 text-xs leading-5 ' +
+                                    (isPending
+                                      ? 'text-slate-500'
+                                      : 'text-amber-800')
+                                  }
+                                >
+                                  {issue.detail}
+                                </p>
+                                {issue.action && (
+                                  <p
+                                    className={
+                                      'mt-1 text-[11px] leading-4 ' +
+                                      (isPending
+                                        ? 'text-slate-500'
+                                        : 'text-amber-700')
+                                    }
+                                  >
+                                    {issue.action}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </section>
+                  )}
+
                   <div className="guide-progress">
                     <h3>分类学分要求</h3>
                     <div className="section-description">
                       各项显示“当前已计入学分 /
-                      培养方案要求”；“必修”与“学位课”分别判断，待核验项目不会自动判定为已满足。
+                      培养方案要求”；统计口径 = 历史已修 + 全部学期已选（前序与已规划的后续学期，自动计入，成绩以实际为准） + 本学期已选。
+                      “必修”与“学位课”分别判断，待核验项目不会自动判定为已满足。
                     </div>
                     <div className="requirement-grid mt-3">
                       {[
                         [
                           '公共必修学位课',
                           formatRequirementProgress(
-                            creditSummary.publicRequiredDegreeCredits,
+                            programCreditSummary.publicRequiredDegreeCredits,
                             publicRequiredDegreeTarget,
                           ),
                         ],
                         [
                           '专业学位课',
                           formatRequirementProgress(
-                            creditSummary.professionalDegreeCredits,
+                            programCreditSummary.professionalDegreeCredits,
                             activePlan.degreeCourseCredits,
                           ),
                         ],
                         [
-                          '专业选修课',
+                          '专业非学位课（专业选修）',
                           formatRequirementProgress(
-                            creditSummary.professionalElectiveCredits,
+                            programCreditSummary.professionalElectiveCredits,
                             activePlan.professionalNonDegreeCredits,
                           ),
                         ],
                         [
-                          '公共选修课',
+                          '公共选修体系（普通公选 + 创新创业）',
                           formatRequirementProgress(
-                            creditSummary.publicElectiveCredits,
+                            programCreditSummary.publicElectiveCredits,
                             publicElectiveTarget,
                           ),
                         ],
                         [
-                          '公共必修非学位课',
+                          '公共必修非学位课（工程伦理）',
                           formatRequirementProgress(
-                            creditSummary.publicRequiredNonDegreeCredits,
+                            programCreditSummary.publicRequiredNonDegreeCredits,
                             publicRequiredNonDegreeTarget,
                           ),
                         ],
                         [
-                          '其中：创新创业课',
+                          '其中：创新创业模块课',
                           formatRequirementProgress(
-                            creditSummary.innovationCredits,
+                            programCreditSummary.innovationCredits,
                             activePlan.innovationCredits,
                           ),
                         ],
@@ -3738,6 +4196,8 @@ export default function CourseExplorer({
                           counted: selectedDegreeCoreCount,
                           selected: selectedPlanCoreCount,
                           available: planCoreCourses.length,
+                          springCount:
+                            semesterCheckup.gaps.springOpportunity.core ?? 0,
                         },
                         {
                           label: '专业课',
@@ -3745,42 +4205,82 @@ export default function CourseExplorer({
                           counted: selectedDegreeProfessionalCount,
                           selected: selectedPlanProfessionalCount,
                           available: planProfessionalCourses.length,
+                          springCount:
+                            semesterCheckup.gaps.springOpportunity.professional ??
+                            0,
                         },
-                      ].map((rule) => (
-                        <article className="degree-rule-card" key={rule.label}>
-                          <div className="degree-rule-heading">
-                            <h4>
-                              <Target />
-                              {rule.label}
-                            </h4>
-                            <span
-                              className={
-                                rule.counted >= rule.minimum ? 'rule-met' : ''
-                              }
-                            >
-                              {rule.counted >= rule.minimum
-                                ? '门数已满足'
-                                : '尚差 ' +
-                                  (rule.minimum - rule.counted) +
-                                  ' 门'}
-                            </span>
-                          </div>
-                          <p className="degree-rule-minimum">
-                            至少 <strong>{rule.minimum}</strong> 门
-                            <span>作为学位课</span>
-                          </p>
-                          <div className="degree-rule-status">
-                            <span>
-                              当前计入 <b>{rule.counted}</b> 门
-                            </span>
-                            <span>要求 ≥ {rule.minimum} 门</span>
-                          </div>
-                          <p className="degree-rule-context">
-                            本学期已选 {rule.selected} 门 · 本学期课程库{' '}
-                            {rule.available} 门可选
-                          </p>
-                        </article>
-                      ))}
+                      ].map((rule) => {
+                        const met =
+                          rule.minimum !== null &&
+                          rule.counted >= rule.minimum;
+                        const unknown = rule.minimum === null;
+                        return (
+                          <article
+                            className="degree-rule-card"
+                            key={rule.label}
+                          >
+                            <div className="degree-rule-heading">
+                              <h4>
+                                <Target />
+                                {rule.label}
+                              </h4>
+                              <span
+                                className={
+                                  met
+                                    ? 'rule-met'
+                                    : unknown
+                                      ? 'text-amber-700'
+                                      : 'text-amber-700'
+                                }
+                              >
+                                {met
+                                  ? '门数已满足'
+                                  : unknown
+                                    ? '待核验（口径待确认）'
+                                    : '尚差 ' +
+                                      (rule.minimum === null
+                                        ? 0
+                                        : rule.minimum - rule.counted) +
+                                      ' 门'}
+                              </span>
+                            </div>
+                            {unknown ? (
+                              <p className="degree-rule-minimum">
+                                学院级最低门数<strong>待核验</strong>
+                                <span>
+                                  本工具不自动套用“2 门核心 + 2 门专业”，请以学院培养方案为准
+                                </span>
+                              </p>
+                            ) : (
+                              <p className="degree-rule-minimum">
+                                至少 <strong>{rule.minimum}</strong> 门
+                                <span>作为学位课</span>
+                              </p>
+                            )}
+                            <div className="degree-rule-status">
+                              <span>
+                                当前计入 <b>{rule.counted}</b> 门
+                              </span>
+                              <span>
+                                要求 ≥{' '}
+                                {rule.minimum === null ? '—（待确认）' : rule.minimum}{' '}
+                                门
+                              </span>
+                            </div>
+                            <p className="degree-rule-context">
+                              本学期已选 {rule.selected} 门 · 本学期课程库{' '}
+                              {rule.available} 门可选
+                            </p>
+                            {!met && !unknown && rule.springCount > 0 && (
+                              <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-5 text-amber-800">
+                                {rule.label}进度 {rule.counted} /{' '}
+                                {rule.minimum}；2027 春季培养方案仍计划开设{' '}
+                                {rule.springCount} 门，可在春季继续完成（非本学期选课错误）。
+                              </p>
+                            )}
+                          </article>
+                        );
+                      })}
                     </div>
                     <p className="degree-rule-note">
                       门数按已修记录与当前方案中符合要求的学位课统计，待确认属性的课程暂不计入。
@@ -3976,8 +4476,9 @@ export default function CourseExplorer({
                       课程属性规则按课程编号第14位解释：1/2为核心课、3为专业课、4-7为强制非学位课、B/X为公共课程；无法解析的编码显示为待核验。
                       {` ${getGraduateProgramScopeLabel(activePlan)}`}
                       课程类别、培养要求分类和学位属性分开保存；《工程伦理》按公共必修非学位课统计，不计入学位课程。
-                      创新创业课程编码依据“2026创新创业课秋季课表.xlsx”标记为“创新创业课”模块，仍按公共选修课归属，学分只累计一次。
-                      HIAS讲堂可按参加次数登记（每次2学时、20学时折算1学分，计入专业非学位课），登记入口见「数据管理」。
+                      创新创业课程编码依据“2026创新创业课秋季课表.xlsx”标记为“创新创业课”模块，仍按公共选修体系归属，学分只累计一次。
+                      HIAS讲堂（人文系列讲座）与科学前沿讲座均按“专业非学位课（专业选修，非学位）”计分：可按参加次数登记（每次2学时、20学时折算1学分），计入专业非学位课学分，不计入公共选修体系、不计入秋季/春季最低10学分的有效学分。
+                      春季（2027-spring）专业课数据为依据2026—2027培养方案整理的春季计划课程，课程时间、班次、容量与最终开设情况以春季正式课表及教务系统为准。
                       {activePlan.program === '物理电子学' &&
                         ' 两份文件中“主被动光谱探测技术”的学分分别为2与2.5，本页采用秋季课表的2.5学分并保留此提示。'}
                     </span>
@@ -4095,11 +4596,21 @@ export default function CourseExplorer({
                     </span>
                   </button>
                 </div>
-                {englishQualificationCredits > 0 && (
+                {semesterMinimumTarget !== null && (
                   <p className="selection-exemption-note">
                     <CheckCircle2 />
-                    已含英语免修免考 +
-                    {formatCredits(englishQualificationCredits)} 学分
+                    计入学期最低要求的有效学分{' '}
+                    <strong>
+                      {formatCredits(semesterEligibleCredits)} /{' '}
+                      {semesterMinimumTarget}
+                    </strong>
+                    {semesterEligibleCredits >= semesterMinimumTarget
+                      ? ' ✓'
+                      : '（还差 ' +
+                        formatCredits(
+                          semesterMinimumTarget - semesterEligibleCredits,
+                        ) +
+                        '；HIAS讲堂/科学前沿讲座不计入）'}
                   </p>
                 )}
                 <button
@@ -4111,7 +4622,10 @@ export default function CourseExplorer({
                   <span>
                     {activePlan.label}
                     <small>
-                      英语免修免考：{englishStatusLabel(englishExemptionStatus)}
+                      英语免修免考：
+                      {englishExemptionStatus === 'approved'
+                        ? '已获得（3 学分计入历史已修，不含在预选学分中）'
+                        : '未获得'}
                     </small>
                   </span>
                   <Settings2 />
@@ -4208,19 +4722,17 @@ export default function CourseExplorer({
                   </Button>
                 </div>
                 <p className="export-hint">CSV 可导入 WakeUp 课程表</p>
-                {selectedCourses.length > 0 &&
-                  recommendationCandidates.length > 0 && (
-                    <button
-                      type="button"
-                      className="recommendation-link"
-                      onClick={() => setRecommendationDialogOpen(true)}
-                    >
-                      <Sparkles />
-                      查看补充建议{' '}
-                      <span>{recommendationCandidates.length}</span>
-                      <ArrowRight />
-                    </button>
-                  )}
+                {selectedCourses.length > 0 && (
+                  <button
+                    type="button"
+                    className="recommendation-link"
+                    onClick={openRecommendationDialog}
+                  >
+                    <Sparkles />
+                    智能补全方案
+                    <ArrowRight />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="clear-selection"
@@ -4328,6 +4840,39 @@ export default function CourseExplorer({
               ))}
             </NativeSelect>
           </label>
+          {isDoctorPlan && (
+            <fieldset className="settings-qualification">
+              <legend id="settings-track-label">博士培养类型</legend>
+              <RadioGroup
+                aria-labelledby="settings-track-label"
+                value={effectiveTrack ?? 'direct_phd'}
+                onValueChange={(value) =>
+                  setDoctorTrack(
+                    value as 'general_phd' | 'direct_phd' | 'combined_phd',
+                  )
+                }
+              >
+                <label className="settings-qualification-option">
+                  <RadioGroupItem value="direct_phd" />
+                  <span>
+                    直博<small>本科直博，公共必修按 11 学分（含硕士基础课）口径</small>
+                  </span>
+                </label>
+                <label className="settings-qualification-option">
+                  <RadioGroupItem value="combined_phd" />
+                  <span>
+                    硕博连读<small>硕转博连读，口径与直博一致</small>
+                  </span>
+                </label>
+                <label className="settings-qualification-option">
+                  <RadioGroupItem value="general_phd" />
+                  <span>
+                    普通招考博士（普博）<small>学院级规则材料未明确，页面按校级口径待确认展示</small>
+                  </span>
+                </label>
+              </RadioGroup>
+            </fieldset>
+          )}
           <fieldset className="settings-qualification">
             <legend id="settings-qualification-label">
               是否已获得英语免修免考资格？
@@ -4358,9 +4903,8 @@ export default function CourseExplorer({
           <p className="settings-explanation">
             {englishQualificationDetail}
             {englishExemptionStatus === 'approved' &&
-              ' 按培养要求计入 ' +
-                formatCredits(englishQualificationCredits) +
-                ' 学分。'}
+              exemptionEarnedCredits > 0 &&
+              ' 计入规则：该 3 学分直接计入“历史已修 / 已获得学分”（2026 秋季），不进入任何学期的预选课程学分；英语课不再需要选课。'}
           </p>
           <p className="settings-explanation">{heroDescription}</p>
           <DialogFooter>
@@ -4407,89 +4951,241 @@ export default function CourseExplorer({
       </AlertDialog>
 
       <Dialog
-        onOpenChange={setRecommendationDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) setApplyPlan(null);
+          setRecommendationDialogOpen(open);
+        }}
         open={recommendationDialogOpen}
       >
-        <DialogContent className="recommendation-dialog max-w-2xl">
+        <DialogContent className="recommendation-dialog max-w-4xl">
           <DialogHeader>
-            <DialogTitle>选课补充建议</DialogTitle>
+            <DialogTitle>智能补全方案</DialogTitle>
             <DialogDescription>
-              {semesterCreditGap > 0
-                ? `当前有效选课学分为 ${formatCredits(semesterEligibleCredits)}，秋季/春季建议达到 10 学分，还差 ${formatCredits(semesterCreditGap)} 学分。`
-                : '本学期有效选课学分已达到 10 学分，以下建议仅用于补充培养方案缺口。'}
+              已选课程默认锁定保留；系统只负责“新增建议”，不会自动删除或替换课程。
+              {semesterCheckup.gaps.semesterCredits !== null &&
+                semesterCheckup.gaps.semesterCredits > 0 &&
+                ` 当前有效选课学分 ${formatCredits(semesterEligibleCredits)} / 10，还需补充 ${formatCredits(semesterCheckup.gaps.semesterCredits)} 学分。`}
+              春季计划课程的最终时间、班次与开设情况以春季正式课表及教务系统为准。
             </DialogDescription>
           </DialogHeader>
 
-          {recommendationCandidates.length ? (
-            <div className="recommendation-dialog-list">
-              {recommendationCandidates.map(({ course, reasons }) => (
-                <div className="recommendation-row" key={course.id}>
-                  <button
-                    onClick={() => {
-                      setRecommendationDialogOpen(false);
-                      setDetailCourse(course);
-                    }}
-                    type="button"
-                  >
-                    <strong>{course.name}</strong>
-                    <span>
-                      {course.category} · {formatCredits(course.credits)} 学分 ·{' '}
-                      {course.schedules[0]?.periodText || '时间待定'}
-                    </span>
-                    <small>{reasons.slice(0, 2).join('；')}</small>
-                  </button>
-                  <Button
-                    className="h-9 shrink-0 rounded-lg"
-                    onClick={() => {
-                      setRecommendationDialogOpen(false);
-                      toggleCourse(course.id);
-                    }}
-                    size="sm"
-                  >
-                    加入
-                  </Button>
+          {applyPlan ? (
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <div>
+                <strong className="text-base">{applyPlan.name}</strong>
+                <p className="text-sm leading-6 text-slate-600">
+                  {applyPlan.intro}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <strong className="text-sm">应用前确认：将新增以下课程</strong>
+                  <Badge variant="secondary">
+                    {applyPlan.additions.length} 门 · 保留当前已选
+                    {selectedCourses.length} 门
+                  </Badge>
                 </div>
-              ))}
+                {applyPlan.additions.map((addition) => (
+                  <div
+                    className="border-t border-slate-100 py-2 text-sm"
+                    key={addition.course.id}
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-1">
+                      <span className="font-semibold text-slate-800">
+                        {addition.course.name}
+                      </span>
+                      <span className="text-slate-500">
+                        {addition.course.category} ·{' '}
+                        {formatCredits(addition.course.credits)} 学分 ·{' '}
+                        {addition.course.schedules[0]?.periodText ||
+                          '时间待定'}
+                      </span>
+                    </div>
+                    {addition.reasons.length > 0 && (
+                      <ul className="mt-1 space-y-0.5 text-xs leading-5 text-slate-500">
+                        {addition.reasons.map((reason) => (
+                          <li key={reason}>· {reason}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {addition.sectionNote && (
+                      <p className="mt-1 text-xs text-blue-700">
+                        {addition.sectionNote}
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {applyPlan.notes.length > 0 && (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                    {applyPlan.notes.join(' ')}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  onClick={() => setApplyPlan(null)}
+                  variant="outline"
+                >
+                  返回方案列表
+                </Button>
+                <Button onClick={() => applyGeneratedPlan(applyPlan)}>
+                  <CheckCircle2 /> 确认应用（可撤销）
+                </Button>
+              </div>
             </div>
           ) : (
-            <div className="recommendation-empty">
-              当前没有找到符合培养要求且不与现有课表冲突的补充课程。
-            </div>
-          )}
+            <>
+              {smartPlans.some((plan) => !plan.empty) ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {smartPlans
+                    .filter((plan) => !plan.empty)
+                    .map((plan) => (
+                      <div
+                        className="flex flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                        key={plan.mode}
+                      >
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <strong>{plan.name}</strong>
+                          <Badge variant="secondary">
+                            +{plan.additions.length} 门
+                          </Badge>
+                        </div>
+                        <p className="text-xs leading-5 text-slate-500">
+                          {plan.intro}
+                        </p>
+                        <div className="mt-3 space-y-1.5 text-xs text-slate-600">
+                          <span className="block">
+                            总学分 {formatCredits(plan.metrics.totalCredits)} ·{' '}
+                            有效{' '}
+                            {formatCredits(plan.metrics.effectiveCredits)}
+                          </span>
+                          <span className="block">
+                            专业学位{' '}
+                            {formatCredits(plan.metrics.professionalDegreeCredits)}
+                            {plan.metrics.degreeCourseCreditsTarget !== null &&
+                              ` / ${plan.metrics.degreeCourseCreditsTarget}`}
+                          </span>
+                          <span className="block">
+                            核心{' '}
+                            {plan.metrics.coreMinimum === null
+                              ? `${plan.metrics.coreCount} 门`
+                              : `${plan.metrics.coreCount}/${plan.metrics.coreMinimum} 门`}
+                            · 专业{' '}
+                            {plan.metrics.professionalMinimum === null
+                              ? `${plan.metrics.professionalCount} 门`
+                              : `${plan.metrics.professionalCount}/${plan.metrics.professionalMinimum} 门`}
+                          </span>
+                          <span className="block">
+                            公共选修体系{' '}
+                            {plan.metrics.publicElectiveCredits}
+                            {plan.metrics.publicElectiveTarget !== null &&
+                              ` / ${plan.metrics.publicElectiveTarget}`}
+                            {plan.metrics.innovationTarget !== null &&
+                              `（创新 ${plan.metrics.innovationCredits}/${plan.metrics.innovationTarget}）`}
+                          </span>
+                          <span className="block">
+                            周末课 {plan.metrics.weekendCourses} · 闭卷{' '}
+                            {plan.metrics.closedExams} · 报告{' '}
+                            {plan.metrics.reportCourses} · 长课时{' '}
+                            {plan.metrics.longSessions} · 待确认时间{' '}
+                            {plan.metrics.pendingTimeCourses}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex-1 space-y-1 border-t border-slate-100 pt-2">
+                          {plan.additions.map((addition) => (
+                            <p
+                              className="text-xs leading-5 text-slate-700"
+                              key={addition.course.id}
+                            >
+                              <strong>{addition.course.name}</strong>
+                              <span className="text-slate-400">
+                                {' '}
+                                · {formatCredits(addition.course.credits)} 学分
+                              </span>
+                            </p>
+                          ))}
+                        </div>
+                        {plan.notes.length > 0 && (
+                          <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-4 text-amber-800">
+                            {plan.notes.join(' ')}
+                          </p>
+                        )}
+                        <Button
+                          className="mt-3 h-9 rounded-lg"
+                          onClick={() => setApplyPlan(plan)}
+                          size="sm"
+                        >
+                          预览与确认
+                        </Button>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div className="recommendation-empty">
+                  当前没有可推荐的补充课程。已满足本学期硬性要求时，可考虑在后续学期继续完成培养方案缺口；计划课程的开设以春季正式课表为准。
+                </div>
+              )}
 
-          {recommendationCombination.length > 1 && (
-            <div className="recommendation-dialog-combination">
-              <div>
-                <strong>可一起加入的组合</strong>
-                <span>
-                  已按教学周、星期、节次和同课不同班规则检查；加入后会再次实时检查课表。
-                </span>
-              </div>
-              <div className="combination-course-list">
-                {recommendationCombination.map((course) => (
-                  <span key={course.id}>{course.name}</span>
-                ))}
-              </div>
-              <Button
-                className="mt-3 h-10 rounded-xl"
-                onClick={() => {
-                  setRecommendationDialogOpen(false);
-                  recommendationCombination.forEach((course) =>
-                    toggleCourse(course.id),
-                  );
-                }}
-              >
-                加入这组课程
-              </Button>
-            </div>
+              {(smartRecommendation?.candidates.length ?? 0) > 0 && (
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Sparkles className="size-4 text-blue-600" />
+                    <strong className="text-sm">候选课程（供手动挑选）</strong>
+                  </div>
+                  <div className="space-y-2">
+                    {smartRecommendation!.candidates
+                      .slice(0, 8)
+                      .map(({ course }) => (
+                        <div
+                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 px-3 py-2"
+                          key={course.id}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-2 text-sm">
+                              <strong>{course.name}</strong>
+                              {course.scheduleStatus === 'planned' && (
+                                <Badge
+                                  className="bg-teal-50 text-teal-700"
+                                  variant="secondary"
+                                >
+                                  春季计划
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500">
+                              {course.category} ·{' '}
+                              {formatCredits(course.credits)} 学分 ·{' '}
+                              {course.schedules[0]?.periodText || '时间待定'}
+                            </p>
+                          </div>
+                          <Button
+                            className="h-9 shrink-0 rounded-lg"
+                            onClick={() => toggleCourse(course.id)}
+                            size="sm"
+                            variant="outline"
+                          >
+                            <Plus /> 加入
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-4 text-slate-400">
+                    候选已按培养缺口、时间冲突、重复班次与名额过滤；仅列出部分供参考。
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           <DialogFooter>
             <Button
-              onClick={() => setRecommendationDialogOpen(false)}
+              onClick={() => {
+                setApplyPlan(null);
+                setRecommendationDialogOpen(false);
+              }}
               variant="outline"
             >
-              稍后查看
+              关闭
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -4502,10 +5198,8 @@ export default function CourseExplorer({
           <DialogHeader>
             <DialogTitle>我的模拟课程表</DialogTitle>
             <DialogDescription>
-              共 {selectedCourses.length} 门课程 · 方案合计{' '}
+              共 {selectedCourses.length} 门课程 · 预选方案合计{' '}
               {formatCredits(selectedCredits)} 学分
-              {englishQualificationCredits > 0 &&
-                `（含英语免修免考 ${formatCredits(englishQualificationCredits)} 学分）`}
             </DialogDescription>
           </DialogHeader>
 
@@ -4676,16 +5370,30 @@ export default function CourseExplorer({
                       创新创业课
                     </Badge>
                   )}
+                  {detailCourse.scheduleStatus === 'planned' && (
+                    <Badge
+                      className="bg-teal-50 text-teal-700"
+                      variant="secondary"
+                    >
+                      春季计划课程
+                    </Badge>
+                  )}
                   <Badge variant="outline">{detailCourse.level}</Badge>
                   <Badge className="source-badge" variant="secondary">
-                    <FileSpreadsheet /> 秋季课表数据
+                    <FileSpreadsheet />{' '}
+                    {detailCourse.scheduleStatus === 'planned'
+                      ? '2026—2027 培养方案 · 春季计划'
+                      : isDefaultTerm
+                        ? '2026 秋季课表数据'
+                        : '当前学期课表数据'}
                   </Badge>
                 </div>
                 <SheetTitle className="text-2xl font-bold leading-tight">
                   {detailCourse.name}
                 </SheetTitle>
                 <SheetDescription>
-                  {detailCourse.englishName || detailCourse.code}
+                  {detailCourse.englishName ||
+                    courseCodeDisplayText(detailCourse)}
                 </SheetDescription>
               </SheetHeader>
               <div className="space-y-6 p-6">
@@ -4693,7 +5401,7 @@ export default function CourseExplorer({
                   {(
                     [
                       ['开课院系', detailCourse.college],
-                      ['课程编码', detailCourse.code],
+                      ['课程编码', courseCodeDisplayText(detailCourse)],
                       ['课程属性', detailCourse.category],
                       ['培养层次', detailCourse.level],
                       ['所属学科/专业', detailCourse.subject],
@@ -4703,9 +5411,11 @@ export default function CourseExplorer({
                       ],
                       [
                         '限选人数',
-                        detailCourse.capacity > 0
-                          ? `${detailCourse.capacity} 人`
-                          : '—',
+                        detailCourse.scheduleStatus === 'planned'
+                          ? '待春季正式课表公布'
+                          : detailCourse.capacity > 0
+                            ? `${detailCourse.capacity} 人`
+                            : '—',
                       ],
                       [
                         '教室',

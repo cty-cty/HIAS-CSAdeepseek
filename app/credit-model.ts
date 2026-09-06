@@ -30,12 +30,42 @@ export type CourseLike = {
   degreeRole?: DegreeRole;
 };
 
-export type DegreeEligibilityStatus = 'eligible' | 'verification' | 'ineligible';
+/**
+ * 课程能否作为某培养要求（学位课等）的认定状态。
+ *
+ * eligible          = 当前正式材料足够确认符合培养方案。
+ * approval_required = 学校规则允许这种认定，但需导师/学院审核后方能确认。
+ * verification      = 当前数据或资料不足、不同正式资料存在口径差异，无法自动确定。
+ * ineligible        = 学校明确规定该类型不能作为对应课程性质（如实验课不能作为学位课）。
+ *
+ * 只有 eligible 能自动计入“确定完成”的培养要求；
+ * approval_required / verification 可以展示、可以选择，但不能自动当成已经满足专业学位要求。
+ * 注意：“不推荐/需审批/资料无法确定”均不等于“不允许”。
+ */
+export type RecognitionStatus =
+  | 'eligible'
+  | 'approval_required'
+  | 'verification'
+  | 'ineligible';
+
+/** 兼容旧代码名称：旧的二态/三态语义已并入四态。 */
+export type DegreeEligibilityStatus = RecognitionStatus;
 
 export type DegreeEligibility = {
-  status: DegreeEligibilityStatus;
+  status: RecognitionStatus;
   reason: string;
 };
+
+export const RECOGNITION_STATUS_LABELS: Record<RecognitionStatus, string> = {
+  eligible: '符合培养方案',
+  approval_required: '需导师/学院审核',
+  verification: '待核验（资料不足或口径不一致）',
+  ineligible: '不符合（规则明确禁止）',
+};
+
+export function recognitionStatusLabel(status: RecognitionStatus) {
+  return RECOGNITION_STATUS_LABELS[status];
+}
 
 export type CourseClassification = {
   requirementType: CourseRequirementType;
@@ -229,24 +259,44 @@ export function getDegreeEligibility(
         reason: `属于一级学科“${mapping.firstLevel}”及其已映射二级学科范围。`,
       };
     }
+    if (!subjectTokens.length) {
+      return {
+        status: 'verification',
+        reason: '该课程未标注所属学科，无法自动判定是否属于本一级学科范围，请核对培养方案或学院认定。',
+      };
+    }
     return {
       status: 'verification',
-      reason: `课程学科“${course.subject}”未在该一级学科的映射范围内，需核对培养方案或学院认定。`,
+      reason: `课程学科“${course.subject}”未在本工具已映射的一级学科范围内。资料不足以自动确定，请以培养方案或学院认定为准。`,
     };
   }
 
+  // 专业型硕士：仅本专业培养方案列出的核心课/专业课可直接认定。
   const isListed =
     plan.coreCourses.includes(course.name) ||
     plan.professionalCourses.includes(course.name);
-  if (!isListed) {
+  if (isListed) {
     return {
-      status: 'ineligible',
-      reason: `专硕仅允许“${plan.program}”本专业培养方案列出的核心课或专业课作为学位课。`,
+      status: 'eligible',
+      reason: `属于“${plan.program}”本专业培养方案列出的核心课或专业课。`,
+    };
+  }
+  // 跨专业课程：官方类型属于 1/2/3（前面已排除非 1/2/3），仅不在本专业明确课程池。
+  // 学校允许“其它专业硕士视培养方案/审核”的认定路径，因此不是 ineligible，
+  // 而是 approval_required（需导师/学院审核）或 verification（口径无法自动确定）。
+  const subjectTokens = (course.subject ?? '')
+    .split(/[、,，;；/]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!subjectTokens.length) {
+    return {
+      status: 'verification',
+      reason: `课程“${course.name}”未标注所属专业，且不在“${plan.program}”培养方案明确课程池中；请结合导师及学院审核确认能否作为学位课。`,
     };
   }
   return {
-    status: 'eligible',
-    reason: `属于“${plan.program}”本专业培养方案列出的核心课或专业课。`,
+    status: 'approval_required',
+    reason: `课程“${course.name}”不属于“${plan.program}”培养方案直接认定的核心课/专业课课程池（官方类型 1/2/3 具有成为学位课的资格）。如需作为专业学位课，请结合导师及学院审核确认。`,
   };
 }
 
@@ -267,13 +317,13 @@ export function getCourseRoleEligibility(
   if (isEngineeringEthics(course)) {
     return {
       status: 'ineligible',
-      reason: '《工程伦理》是公共必修非学位课，不能设置为学位课。',
+      reason: '《工程伦理》是工程硕士公共必修非学位课程，不能设置为学位课。',
     };
   }
   if (isHiasCourse(course)) {
     return {
       status: 'ineligible',
-      reason: 'HIAS讲堂按专业非学位课学分登记，不能设置为学位课。',
+      reason: 'HIAS讲堂（人文系列讲座）按专业非学位课（专业选修）登记，不能设置为学位课。',
     };
   }
   if (isPublicRequiredCourse(course)) {
@@ -350,6 +400,8 @@ export function courseFamilyKey(course: Pick<CourseLike, 'code' | 'name'>) {
  * 同一门课的不同班级（如 新中特-01/02/03班、英语各小班）共用同一个 family key，
  * 保证 1 班标为学位课后，2 班、3 班视为同一属性，不产生“一班是、二班不是”的矛盾。
  * 存储键：`family:<courseFamilyKey>`（读取时兼容旧版按完整课程编码保存的数据）。
+ * 注：family 仅用于“属性延续/去重展示”，跨学期/跨数据集的正式匹配请使用
+ * canonicalCourseId（见 course-identity.ts），两者分工不同。
  */
 export function designationLookupKey(
   course: Pick<CourseLike, 'code' | 'name'>,
@@ -455,6 +507,8 @@ export function getCourseRequirementType(
     return 'publicRequiredNonDegree';
   }
   if (isHiasCourse(course)) {
+    // HIAS讲堂（人文系列讲座）：专业非学位课（专业选修）——可计入“专业非学位课”学分，
+    // 不计入公共选修体系，也不计入秋/春季最低10学分的有效学分（有效学分口径见 UI/引擎侧过滤）。
     return 'professionalElective';
   }
   if (isPublicRequiredCourse(course)) {
@@ -466,10 +520,15 @@ export function getCourseRequirementType(
     return 'publicElective';
   }
   if (isNonDegreeOnly(course)) {
+    // 研讨课/实验课/实践课/科学前沿讲座：专业选修（非学位）。
+    // 注意：科学前沿讲座 ≠ HIAS讲堂，两者培养归属不同，不再共用同一类目。
     return 'professionalElective';
   }
 
   if (designation === 'degree') {
+    // 只有 eligible 自动计入“确定完成”的专业学位要求；
+    // approval_required / verification（如跨专业学位课、资料口径冲突）不会自动累计，
+    // 但课程仍可展示并保留用户的选择（归入 pending，由导师/学院确认后另行处理）。
     return getDegreeEligibility(course, plan).status === 'eligible'
       ? 'professionalDegree'
       : 'pending';
@@ -559,7 +618,7 @@ function addRequirementCredits(
 }
 
 function historicalCourseLike(record: HistoricalRecord) {
-  const module: CourseModule =
+  const courseModule: CourseModule =
     record.module === 'hias'
       ? 'hias'
       : record.module === 'innovation'
@@ -570,7 +629,7 @@ function historicalCourseLike(record: HistoricalRecord) {
     name: record.courseName,
     category: record.category,
     subject: record.subject ?? '',
-    module,
+    module: courseModule,
   };
 }
 
@@ -815,7 +874,7 @@ export function getPlanCourseCounts({
         },
         plan,
       ).status === 'eligible' &&
-      isCoreDegreeType(record),
+      isCoreDegreeType({ code: record.courseCode, category: record.category }),
   ).length;
   const historicalProfessionalCount = historicalRecords.filter(
     (record) =>
@@ -830,7 +889,10 @@ export function getPlanCourseCounts({
         },
         plan,
       ).status === 'eligible' &&
-      isProfessionalDegreeType(record),
+      isProfessionalDegreeType({
+        code: record.courseCode,
+        category: record.category,
+      }),
   ).length;
   return {
     coreCount: selectedCoreCount + historicalCoreCount,

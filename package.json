@@ -11,6 +11,7 @@
     "build:offline": "vite build --config vite.offline.config.ts && node scripts/package-offline.mjs && node scripts/validate-offline.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
+    "test:rules": "node scripts/run-rule-tests.mjs",
     "format": "oxfmt"
   },
   "dependencies": {
