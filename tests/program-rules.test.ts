@@ -183,6 +183,47 @@ gaps = calculateProgramGaps({
   confirmedDegreeNames: ['集成与微纳光子学', '激光原理', 'FPGA电路软硬件设计'],
 });
 ok(gaps.degreeRuleSatisfied === false && gaps.degreeCreditsShort === false, 'S2 degree=12但core=1 → 未完成');
+// 2b) 跨专业学位课可补充 12 学分，但 2+2 门数必须由本专业满足
+gaps = calculateProgramGaps({
+  plan: optical,
+  summary: {
+    publicRequiredDegreeCredits: 7,
+    publicRequiredNonDegreeCredits: 1,
+    professionalDegreeCredits: 12, // 其中 4 学分来自跨专业（确认 8 + 待审核 4）
+    professionalDegreePendingApprovalCredits: 4,
+    professionalElectiveCredits: 2,
+    publicElectiveCredits: 3,
+    innovationCredits: 1,
+  },
+  courseCounts: { coreCount: 1, professionalCount: 2 },
+  confirmedDegreeNames: ['集成与微纳光子学', '激光原理', 'FPGA电路软硬件设计'],
+});
+ok(
+  gaps.degreeCourseCreditsConfirmed === 8 &&
+    gaps.professionalDegreePendingApprovalCredits === 4 &&
+    gaps.degreeCreditsShort === false &&
+    gaps.degreePendingApprovalUsed === true,
+  'S2b 跨专业待审核学分可补足 12 学分总量（标记待审核），不替代本专业',
+);
+ok(gaps.degreeRuleSatisfied === false, 'S2b2 核心只有1门 → 2+2 未满足，整体仍未完成');
+gaps = calculateProgramGaps({
+  plan: optical,
+  summary: {
+    publicRequiredDegreeCredits: 7,
+    publicRequiredNonDegreeCredits: 1,
+    professionalDegreeCredits: 12,
+    professionalDegreePendingApprovalCredits: 4,
+    professionalElectiveCredits: 2,
+    publicElectiveCredits: 3,
+    innovationCredits: 1,
+  },
+  courseCounts: { coreCount: 2, professionalCount: 2 },
+  confirmedDegreeNames: ['集成与微纳光子学', '高等光学原理', '激光原理', 'FPGA电路软硬件设计'],
+});
+ok(
+  gaps.degreeRuleSatisfied === true && gaps.degreePendingApprovalUsed === true,
+  'S2c 2+2 满足且跨专业补充达 12 学分 → 整体通过（12 学分部分仍需审核确认）',
+);
 // 3) AI core2 但缺 高级AI/自然语言处理 → 特殊规则失败
 gaps = calculateProgramGaps({
   plan: ai,
@@ -264,13 +305,21 @@ eq(getDegreeEligibility(otherProgramCourse, optical).status, 'approval_required'
 // 10) approval_required degree → 不自动计入已确认专业学位
 const summaryCross = calculateCreditSummary({
   selectedCourses: [otherProgramCourse],
-  designations: { [canonicalCourseId(otherProgramCourse)]: 'degree' },
+  designations: { 'family:绿色工艺与技术': 'degree' },
   historicalRecords: [],
   exemptionStatus: 'normal',
   plan: optical,
 });
-ok(summaryCross.professionalDegreeCredits === 0, 'S10 approval_required 不计入已确认专业学位');
-ok(summaryCross.plannedDegreeCredits > 0 || summaryCross.plannedRequirementCredits.pending > 0, 'S10b degree 标记保留但归属 pending');
+// 10) approval_required 学位课 → 计入“专业学位课学分总量”的补充（需审核），并单独标记待审核
+ok(summaryCross.professionalDegreeCredits === 2, 'S10 跨专业学位课计入专业学位课学分总量（补充学分）');
+ok(
+  summaryCross.professionalDegreePendingApprovalCredits === 2,
+  'S10b 跨专业部分单独标记为待审核（professionalDegreePendingApprovalCredits）',
+);
+ok(
+  summaryCross.plannedDegreeCredits > 0,
+  'S10c degree 标记被保留（学位课属性）',
+);
 // 11) 同课程 01/02 班 → canonical 一致
 const sec1 = { code: '280216010108MB001-01', name: '新时代中国特色社会主义理论与实践-01班' };
 const sec2 = { code: '280216010108MB001-02', name: '新时代中国特色社会主义理论与实践-02班' };

@@ -32,6 +32,10 @@ export function cleanCourseNameForMatch(name?: string | null) {
     .replace(/[-—－]?\d+班$/, '');
 }
 
+function formatCreditsSmall(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 export type PublicRequiredBucket = {
   id: 'degree' | 'non-degree';
   label: string;
@@ -62,9 +66,16 @@ export type ProgramGaps = {
   semesterTarget: number | null;
   publicRequired: PublicRequiredBucket[];
   degreeCourseCreditsTarget: number | null;
+  /** 专业学位课学分中“本专业可确认（eligible）”部分。 */
   degreeCourseCreditsConfirmed: number;
-  /** true 表示仍有已确认（eligible）专业学位学分缺口。 */
+  /** 专业学位课学分中“跨专业、需导师/学院审核（approval_required）”部分。 */
+  professionalDegreePendingApprovalCredits: number;
+  /** 专业学位课总学分 = 确认部分 + 待审核补充部分。 */
+  professionalDegreeTotalCredits: number;
+  /** true 表示确认学分已足够，或加上待审核补充后足够（补充部分用 amber 提示）。 */
   degreeCreditsShort: boolean;
+  /** true 表示“≥12 学分”需依赖跨专业待审核补充才能满足（尚未审核确认）。 */
+  degreePendingApprovalUsed: boolean;
   coreCount: number;
   coreMinimum: number | null;
   professionalCount: number;
@@ -95,6 +106,7 @@ export type GapInput = {
     publicRequiredDegreeCredits: number;
     publicRequiredNonDegreeCredits: number;
     professionalDegreeCredits: number;
+    professionalDegreePendingApprovalCredits?: number;
     professionalElectiveCredits: number;
     publicElectiveCredits: number;
     innovationCredits: number;
@@ -292,9 +304,22 @@ export function calculateProgramGaps(input: GapInput): ProgramGaps {
 
   const publicElectiveTarget =
     (plan.publicElectiveCredits ?? 0) + (plan.innovationCredits ?? 0);
-  const degreeCreditsShort =
+  // 专业学位课 ≥12 学分：本专业确认(eligible)部分优先；跨专业课程（approval_required）
+  // 可作为补充学分，但需导师/学院审核，且不替代本专业 2+2 门数。
+  const professionalDegreeTotalCredits = summary.professionalDegreeCredits;
+  const professionalDegreePendingApprovalCredits =
+    summary.professionalDegreePendingApprovalCredits ?? 0;
+  const degreeCourseCreditsConfirmed =
+    professionalDegreeTotalCredits - professionalDegreePendingApprovalCredits;
+  const creditsOkConfirmed =
+    degreeCourseCreditsTarget === null ||
+    degreeCourseCreditsConfirmed >= degreeCourseCreditsTarget;
+  const creditsOkWithPending =
+    !creditsOkConfirmed &&
     degreeCourseCreditsTarget !== null &&
-    summary.professionalDegreeCredits < degreeCourseCreditsTarget;
+    professionalDegreeTotalCredits >= degreeCourseCreditsTarget;
+  const degreeCreditsShort = !creditsOkConfirmed && !creditsOkWithPending;
+  const degreePendingApprovalUsed = creditsOkWithPending;
   const coreShort =
     coreMinimum !== null && courseCounts.coreCount < coreMinimum;
   const professionalShort =
@@ -346,8 +371,11 @@ export function calculateProgramGaps(input: GapInput): ProgramGaps {
     semesterTarget: semesterTarget ?? null,
     publicRequired,
     degreeCourseCreditsTarget,
-    degreeCourseCreditsConfirmed: summary.professionalDegreeCredits,
+    degreeCourseCreditsConfirmed,
+    professionalDegreePendingApprovalCredits,
+    professionalDegreeTotalCredits,
     degreeCreditsShort,
+    degreePendingApprovalUsed,
     coreCount: courseCounts.coreCount,
     coreMinimum,
     professionalCount: courseCounts.professionalCount,
@@ -535,26 +563,39 @@ export function calculateSemesterCheckup(
     });
   });
 
-  const degreeDone =
-    gaps.degreeCourseCreditsTarget !== null &&
-    gaps.degreeCourseCreditsConfirmed >= gaps.degreeCourseCreditsTarget;
+  const degreeTarget = gaps.degreeCourseCreditsTarget;
+  const degreeConfirmed = gaps.degreeCourseCreditsConfirmed;
+  const degreePending = gaps.professionalDegreePendingApprovalCredits;
+  const degreeTotal = gaps.professionalDegreeTotalCredits;
+  const degreeDone = degreeTarget !== null && degreeConfirmed >= degreeTarget;
+  const degreePendingReview =
+    !degreeDone && degreeTarget !== null && degreeTotal >= degreeTarget;
   progress.push({
     id: 'progress-degree-credits',
     kind: 'progress-degree',
     severity: 'progress',
-    tone: degreeDone ? 'green' : gaps.degreeCourseCreditsTarget === null ? 'slate' : 'amber',
+    tone: degreeDone
+      ? 'green'
+      : degreeTarget === null
+        ? 'slate'
+        : 'amber',
     title: '专业学位课学分',
     detail:
-      gaps.track === 'general_phd' && gaps.degreeCourseCreditsTarget === 4
-        ? `当前 ${gaps.degreeCourseCreditsConfirmed} / 4（校级口径），学院级规则待确认。`
-        : degreeDone
-          ? `当前 ${gaps.degreeCourseCreditsConfirmed} / ${gaps.degreeCourseCreditsTarget}，已满足。`
-          : gaps.degreeCourseCreditsTarget === null
-            ? '当前值待核验：培养材料未明确最低值。'
-            : `当前 ${gaps.degreeCourseCreditsConfirmed} / ${gaps.degreeCourseCreditsTarget}；后续学期仍需完成。`,
-    action: degreeDone || gaps.degreeCourseCreditsTarget === null ? undefined : '培养方案进度，非本学期选课错误。',
-    counted: gaps.degreeCourseCreditsConfirmed,
-    target: gaps.degreeCourseCreditsTarget,
+      gaps.track === 'general_phd' && degreeTarget === 4
+        ? `当前 ${degreeConfirmed} / 4（校级口径），学院级规则待确认。`
+        : degreeTarget === null
+          ? '当前值待核验：培养材料未明确最低值。'
+          : degreeDone
+            ? `当前 ${degreeConfirmed} / ${degreeTarget}，已满足。`
+            : degreePendingReview
+              ? `当前确认 ${degreeConfirmed} / ${degreeTarget}；另有 ${formatCreditsSmall(degreePending)} 学分来自跨专业课程，若通过导师/学院审核即可满足 ≥${degreeTarget}（本专业 2 门核心 + 2 门专业仍需由本专业课程满足）。`
+              : `当前确认 ${degreeConfirmed} / ${degreeTarget}${degreePending > 0 ? `（另有 ${formatCreditsSmall(degreePending)} 学分跨专业待审核）` : ''}；后续学期仍需完成。`,
+    action:
+      degreeDone || degreeTarget === null || degreePendingReview
+        ? undefined
+        : '培养方案进度，非本学期选课错误。',
+    counted: degreeConfirmed,
+    target: degreeTarget,
   });
 
   progress.push(

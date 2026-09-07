@@ -1879,6 +1879,12 @@ export default function CourseExplorer({
       }),
     [activePlan, exemptionHistory, programCourses, programDesignations],
   );
+  // 专业学位课学分口径拆分：确认部分（本专业 eligible）与跨专业待审核补充部分
+  const professionalDegreeConfirmedCredits =
+    programCreditSummary.professionalDegreeCredits -
+    programCreditSummary.professionalDegreePendingApprovalCredits;
+  const professionalDegreePendingApprovalCredits =
+    programCreditSummary.professionalDegreePendingApprovalCredits;
   // 当学期“预选”方案学分合计：免修免考的 3 学分不进入任何学期的预选学分
   // （它已作为“已获得/历史已修”计入，见 exemptionHistory）。
   const selectedCredits = creditSummary.selectionCredits;
@@ -2164,6 +2170,8 @@ export default function CourseExplorer({
             programCreditSummary.publicRequiredNonDegreeCredits,
           professionalDegreeCredits:
             programCreditSummary.professionalDegreeCredits,
+          professionalDegreePendingApprovalCredits:
+            programCreditSummary.professionalDegreePendingApprovalCredits,
           professionalElectiveCredits:
             programCreditSummary.professionalElectiveCredits,
           publicElectiveCredits: programCreditSummary.publicElectiveCredits,
@@ -4132,58 +4140,77 @@ export default function CourseExplorer({
                     </div>
                     <div className="requirement-grid mt-3">
                       {[
-                        [
-                          '公共必修学位课',
-                          formatRequirementProgress(
+                        {
+                          label: '公共必修学位课',
+                          value: formatRequirementProgress(
                             programCreditSummary.publicRequiredDegreeCredits,
                             publicRequiredDegreeTarget,
                           ),
-                        ],
-                        [
-                          '专业学位课',
-                          formatRequirementProgress(
-                            programCreditSummary.professionalDegreeCredits,
+                        },
+                        {
+                          label: '专业学位课',
+                          value: formatRequirementProgress(
+                            professionalDegreeConfirmedCredits,
                             activePlan.degreeCourseCredits,
                           ),
-                        ],
-                        [
-                          '专业非学位课（专业选修）',
-                          formatRequirementProgress(
+                          meta:
+                            professionalDegreePendingApprovalCredits > 0
+                              ? `＋${formatCredits(professionalDegreePendingApprovalCredits)} 学分跨专业待审核`
+                              : undefined,
+                        },
+                        {
+                          label: '专业非学位课（专业选修）',
+                          value: formatRequirementProgress(
                             programCreditSummary.professionalElectiveCredits,
                             activePlan.professionalNonDegreeCredits,
                           ),
-                        ],
-                        [
-                          '公共选修体系（普通公选 + 创新创业）',
-                          formatRequirementProgress(
+                        },
+                        {
+                          label: '公共选修体系（普通公选 + 创新创业）',
+                          value: formatRequirementProgress(
                             programCreditSummary.publicElectiveCredits,
                             publicElectiveTarget,
                           ),
-                        ],
-                        [
-                          '公共必修非学位课（工程伦理）',
-                          formatRequirementProgress(
+                        },
+                        {
+                          label: '公共必修非学位课（工程伦理）',
+                          value: formatRequirementProgress(
                             programCreditSummary.publicRequiredNonDegreeCredits,
                             publicRequiredNonDegreeTarget,
                           ),
-                        ],
-                        [
-                          '其中：创新创业模块课',
-                          formatRequirementProgress(
+                        },
+                        {
+                          label: '其中：创新创业模块课',
+                          value: formatRequirementProgress(
                             programCreditSummary.innovationCredits,
                             activePlan.innovationCredits,
                           ),
-                        ],
-                      ].map(([label, value]) => (
+                        },
+                      ].map((item) => (
                         <div
                           className="requirement-item"
-                          key={`progress-${label}`}
+                          key={`progress-${item.label}`}
                         >
-                          <span>{label}</span>
-                          <strong>{value}</strong>
+                          <span>{item.label}</span>
+                          <strong>{item.value}</strong>
+                          {item.meta && (
+                            <em className="text-[11px] font-semibold not-italic leading-4 text-amber-700">
+                              {item.meta}
+                            </em>
+                          )}
                         </div>
                       ))}
                     </div>
+                    {professionalDegreePendingApprovalCredits > 0 && (
+                      <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                        专业学位课中含{' '}
+                        {formatCredits(professionalDegreePendingApprovalCredits)}{' '}
+                        学分来自<strong>其它专业</strong>的核心课/专业课（你已设为“学位课”）：
+                        可计入“专业学位课 ≥{' '}
+                        {formatCredits(activePlan.degreeCourseCredits)} 学分”的补充总量，但需
+                        导师/学院审核确认；本专业“2 门核心 + 2 门专业”门数仍须由本专业课程满足。
+                      </p>
+                    )}
                   </div>
 
                   <div className="guide-coverage">

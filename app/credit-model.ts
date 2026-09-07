@@ -296,7 +296,7 @@ export function getDegreeEligibility(
   }
   return {
     status: 'approval_required',
-    reason: `课程“${course.name}”不属于“${plan.program}”培养方案直接认定的核心课/专业课课程池（官方类型 1/2/3 具有成为学位课的资格）。如需作为专业学位课，请结合导师及学院审核确认。`,
+    reason: `课程“${course.name}”不属于“${plan.program}”培养方案直接认定的核心课/专业课课程池（官方类型 1/2/3 具有成为学位课的资格）。可作为“专业学位课学分”的补充（需导师/学院审核），但不能替代本专业“2门核心+2门专业”的门数要求。`,
   };
 }
 
@@ -526,10 +526,13 @@ export function getCourseRequirementType(
   }
 
   if (designation === 'degree') {
-    // 只有 eligible 自动计入“确定完成”的专业学位要求；
-    // approval_required / verification（如跨专业学位课、资料口径冲突）不会自动累计，
-    // 但课程仍可展示并保留用户的选择（归入 pending，由导师/学院确认后另行处理）。
-    return getDegreeEligibility(course, plan).status === 'eligible'
+    // 本专业明确课程池 → eligible：自动计入“确定完成”；
+    // 其它专业的核心/专业课（官方 1/2/3 类）→ approval_required：
+    // 可作为“专业学位课 ≥12 学分”的补充学分（计入 professionalDegree），
+    // 但不能替代本专业“核心2门+专业2门”的门数要求；其审核状态由
+    // professionalDegreePendingApprovalCredits 单独统计展示。
+    const status = getDegreeEligibility(course, plan).status;
+    return status === 'eligible' || status === 'approval_required'
       ? 'professionalDegree'
       : 'pending';
   }
@@ -589,6 +592,12 @@ export type CreditSummary = {
   publicRequiredDegreeCredits: number;
   publicRequiredNonDegreeCredits: number;
   professionalDegreeCredits: number;
+  /**
+   * 专业学位课学分中来自“跨专业需导师/学院审核（approval_required）”的部分。
+   * 这类课程可以补充“专业学位课 ≥12 学分”的学分总量，但计入时仍需审核确认；
+   * 同时它们不参与本专业“核心2门+专业2门”的门数统计。
+   */
+  professionalDegreePendingApprovalCredits: number;
   professionalElectiveCredits: number;
   publicElectiveCredits: number;
   innovationCredits: number;
@@ -778,6 +787,24 @@ export function calculateCreditSummary({
   const publicElectiveCredits =
     historicalRequirementCredits.publicElective +
     plannedRequirementCredits.publicElective;
+  // 专业学位课学分中“跨专业需导师/学院审核（approval_required）”的部分：
+  // 计入 professionalDegree（可补充 ≥12 学分的总量），但不进入本专业 2+2 门数统计。
+  const professionalDegreePendingApprovalCredits =
+    plannedClassifications
+      .filter(
+        ({ course, classification }) =>
+          classification.requirementType === 'professionalDegree' &&
+          getDegreeEligibility(course, plan).status === 'approval_required',
+      )
+      .reduce((sum, { course }) => sum + course.credits, 0) +
+    historicalClassifications
+      .filter(
+        ({ record, classification }) =>
+          classification.requirementType === 'professionalDegree' &&
+          getDegreeEligibility(historicalCourseLike(record), plan).status ===
+            'approval_required',
+      )
+      .reduce((sum, { record }) => sum + record.credits, 0);
 
   return {
     historicalCredits: sumCredits(completedHistory),
@@ -819,6 +846,7 @@ export function calculateCreditSummary({
     publicRequiredDegreeCredits,
     publicRequiredNonDegreeCredits,
     professionalDegreeCredits,
+    professionalDegreePendingApprovalCredits,
     professionalElectiveCredits,
     publicElectiveCredits,
     innovationCredits:
