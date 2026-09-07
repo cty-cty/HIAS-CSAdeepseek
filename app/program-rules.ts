@@ -655,34 +655,45 @@ export function calculateSemesterCheckup(
     id: 'progress-public-elective-system',
     kind: 'progress-public-elective',
     severity: 'progress',
-    tone: publicElectiveDone ? 'green' : gaps.publicElectiveTarget === null ? 'slate' : 'amber',
-    title: '公共选修体系（普通公选 + 创新创业）',
+    tone: publicElectiveDone
+      ? 'green'
+      : gaps.publicElectiveTarget === null
+        ? 'slate'
+        : 'amber',
+    title:
+      gaps.innovationTarget !== null && gaps.innovationTarget !== undefined
+        ? '公共选修体系（含创新创业模块）'
+        : '公共选修体系',
     detail: publicElectiveDone
       ? `当前 ${gaps.publicElectiveCredits} / ${gaps.publicElectiveTarget}，已满足。`
       : gaps.publicElectiveTarget === null
         ? '当前值待核验。'
-        : `当前 ${gaps.publicElectiveCredits} / ${gaps.publicElectiveTarget}（体系合计，不理解为两套要求相加；不含 HIAS讲堂——讲堂学分计入专业非学位课）。`,
-    action: publicElectiveDone || gaps.publicElectiveTarget === null ? undefined : '培养方案进度，非本学期选课错误。',
+        : `当前 ${gaps.publicElectiveCredits} / ${gaps.publicElectiveTarget}（体系合计——专硕的创新创业模块已包含在内，不理解为两套要求相加；不含 HIAS讲堂，讲堂学分计入专业非学位课）。`,
+    action:
+      publicElectiveDone || gaps.publicElectiveTarget === null
+        ? undefined
+        : '培养方案进度，非本学期选课错误。',
     counted: gaps.publicElectiveCredits,
     target: gaps.publicElectiveTarget,
   });
 
-  const innovationDone =
-    gaps.innovationTarget !== null && gaps.innovationCredits >= gaps.innovationTarget;
-  progress.push({
-    id: 'progress-innovation',
-    kind: 'progress-innovation',
-    severity: 'progress',
-    tone: innovationDone ? 'green' : gaps.innovationTarget === null ? 'slate' : 'amber',
-    title: '其中：创新创业模块课程',
-    detail: innovationDone
-      ? `当前 ${gaps.innovationCredits} / ${gaps.innovationTarget}，已满足。`
-      : gaps.innovationTarget === null
-        ? '当前值待核验：材料未明确。'
-        : `当前 ${gaps.innovationCredits} / ${gaps.innovationTarget}。`,
-    counted: gaps.innovationCredits,
-    target: gaps.innovationTarget,
-  });
+  // 创新创业模块：是公共选修体系的一部分（专硕口径），作为“其中”子项单独提示，不额外相加
+  if (gaps.innovationTarget !== null && gaps.innovationTarget !== undefined) {
+    const innovationDone =
+      gaps.innovationCredits >= gaps.innovationTarget;
+    progress.push({
+      id: 'progress-innovation',
+      kind: 'progress-innovation',
+      severity: 'progress',
+      tone: innovationDone ? 'green' : 'amber',
+      title: '其中：创新创业模块（含在公共选修体系内）',
+      detail: innovationDone
+        ? `当前 ${gaps.innovationCredits} / ${gaps.innovationTarget}，已满足。`
+        : `当前 ${gaps.innovationCredits} / ${gaps.innovationTarget}（计入上一条“公共选修体系”合计，不额外 +1）。`,
+      counted: gaps.innovationCredits,
+      target: gaps.innovationTarget,
+    });
+  }
 
   gaps.specialRules.forEach((rule) => {
     const done = rule.satisfied === true;

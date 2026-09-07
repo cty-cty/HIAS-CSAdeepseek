@@ -4166,24 +4166,33 @@ export default function CourseExplorer({
                           ),
                         },
                         {
-                          label: '公共选修体系（普通公选 + 创新创业）',
+                          label:
+                            activePlan.innovationCredits !== null &&
+                            activePlan.innovationCredits !== undefined
+                              ? '公共选修体系（含创新创业模块）'
+                              : '公共选修体系',
                           value: formatRequirementProgress(
                             programCreditSummary.publicElectiveCredits,
                             publicElectiveTarget,
                           ),
+                          meta:
+                            activePlan.innovationCredits !== null &&
+                            activePlan.innovationCredits !== undefined
+                              ? `其中创新创业模块 ${formatCredits(programCreditSummary.innovationCredits)} / ${formatCredits(activePlan.innovationCredits)} 学分（含在体系合计内，不额外相加）`
+                              : undefined,
+                          metaTone:
+                            activePlan.innovationCredits !== null &&
+                            activePlan.innovationCredits !== undefined &&
+                            programCreditSummary.innovationCredits >=
+                              activePlan.innovationCredits
+                              ? 'ok'
+                              : 'amber',
                         },
                         {
                           label: '公共必修非学位课（工程伦理）',
                           value: formatRequirementProgress(
                             programCreditSummary.publicRequiredNonDegreeCredits,
                             publicRequiredNonDegreeTarget,
-                          ),
-                        },
-                        {
-                          label: '其中：创新创业模块课',
-                          value: formatRequirementProgress(
-                            programCreditSummary.innovationCredits,
-                            activePlan.innovationCredits,
                           ),
                         },
                       ].map((item) => (
@@ -4194,7 +4203,15 @@ export default function CourseExplorer({
                           <span>{item.label}</span>
                           <strong>{item.value}</strong>
                           {item.meta && (
-                            <em className="text-[11px] font-semibold not-italic leading-4 text-amber-700">
+                            <em
+                              className={
+                                'text-[11px] font-semibold not-italic leading-4 ' +
+                                ((item as { metaTone?: 'ok' | 'amber' })
+                                  .metaTone === 'ok'
+                                  ? 'text-emerald-700'
+                                  : 'text-amber-700')
+                              }
+                            >
                               {item.meta}
                             </em>
                           )}
