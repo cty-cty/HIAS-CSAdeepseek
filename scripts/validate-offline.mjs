@@ -25,7 +25,15 @@ const documentShell = html.slice(0, html.indexOf('<script>'));
 
 if (/<script\b[^>]*\bsrc=/i.test(documentShell))
   failures.push('仍包含外部脚本');
-if (/<link\b[^>]*\bhref=/i.test(documentShell)) failures.push('仍包含外部样式');
+// 允许 data: 内联图标（离线单文件必须自包含），其余外部资源一律不允许。
+const externalLinks = [
+  ...documentShell.matchAll(/<link\b[^>]*\bhref=["']([^"']+)["']/gi),
+]
+  .map((match) => match[1])
+  .filter((href) => !href.startsWith('data:'));
+if (externalLinks.length) {
+  failures.push(`仍包含外部样式或资源：${externalLinks.join('、')}`);
+}
 if (html.includes('hias-logo-white.png')) failures.push('仍包含官方 Logo 资源');
 if (html.includes('process.env.NODE_ENV'))
   failures.push('仍包含浏览器无法识别的环境变量');

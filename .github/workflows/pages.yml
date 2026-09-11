@@ -32,12 +32,10 @@ jobs:
         run: npm ci
 
       - name: Build standalone page
-        run: |
-          npm run build:offline
-          mkdir -p _site
-          cp ../HIAS-CSA-2026秋季预选课助手-离线版.html _site/index.html
-          sed -i 's/（离线版）//g' _site/index.html
-          touch _site/.nojekyll
+        run: npm run build:offline
+
+      - name: Prepare Pages site (icons, manifest, share metadata, 404)
+        run: node scripts/prepare-pages.mjs
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

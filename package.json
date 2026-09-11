@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.18.0"
   },
   "scripts": {
     "dev": "vinext dev",
     "build": "node scripts/build-site.mjs",
-    "build:offline": "vite build --config vite.offline.config.ts && node scripts/package-offline.mjs && node scripts/validate-offline.mjs",
+    "build:offline": "vite build --config vite.offline.config.ts --configLoader native && node scripts/package-offline.mjs && node scripts/validate-offline.mjs",
+    "build:pages": "npm run build:offline && node scripts/prepare-pages.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "test:rules": "node scripts/run-rule-tests.mjs",

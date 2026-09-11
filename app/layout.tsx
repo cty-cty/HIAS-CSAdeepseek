@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import ErrorBoundary from '@/components/error-boundary';
 import OfflineRegistration from './offline-registration';
 
 export const metadata: Metadata = {
@@ -37,7 +38,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body>
-        {children}
+        <ErrorBoundary>{children}</ErrorBoundary>
         <OfflineRegistration />
       </body>
     </html>
