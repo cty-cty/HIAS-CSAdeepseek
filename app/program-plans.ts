@@ -45,6 +45,8 @@ export type ProgramPlan = {
   label: string;
   degree: string;
   program: string;
+  /** 可选：所属学院，用于培养方向菜单与课程学科筛选的一级分组。 */
+  college?: string;
   code: string;
   totalCredits: number;
   publicRequiredCredits: number | null;
@@ -74,6 +76,56 @@ export type ProgramPlan = {
   note?: string;
 };
 
+/** 学院一级目录；没有课程或培养方案的学院也可以先占位展示。 */
+export type CollegeDirectoryEntry = {
+  id: string;
+  label: string;
+  aliases?: string[];
+};
+
+export const COLLEGE_DIRECTORY: CollegeDirectoryEntry[] = [
+  { id: 'physics-mathematics', label: '基础物理与数学科学学院' },
+  {
+    id: 'physics-optoelectronics',
+    label: '物理与光电工程学院',
+    aliases: ['物光学院'],
+  },
+  { id: 'chemistry-materials', label: '化学与材料科学学院' },
+  { id: 'life-health', label: '生命与健康科学学院' },
+  { id: 'pharmaceutical-science', label: '药物科学与技术学院' },
+  { id: 'environment', label: '环境学院' },
+  { id: 'molecular-medicine', label: '分子医学院' },
+  { id: 'intelligent-science-technology', label: '智能科学与技术学院' },
+];
+
+/** 自定义方案未填 college 时的兜底分组名。 */
+export const FALLBACK_PROGRAM_PLAN_COLLEGE = '其他培养方案';
+
+export function getProgramPlanCollege(
+  plan: Pick<ProgramPlan, 'college'>,
+): string {
+  const college = plan.college?.trim();
+  if (!college) return FALLBACK_PROGRAM_PLAN_COLLEGE;
+  const directoryEntry = COLLEGE_DIRECTORY.find(
+    (entry) => entry.label === college || entry.aliases?.includes(college),
+  );
+  return directoryEntry?.label ?? college;
+}
+
+/** 按学院分组培养方案；顺序沿用 COLLEGE_DIRECTORY，自定义学院追加在后。 */
+export function groupProgramPlansByCollege(
+  plans: ProgramPlan[],
+): Array<[string, ProgramPlan[]]> {
+  const groupMap = new Map<string, ProgramPlan[]>();
+  plans.forEach((plan) => {
+    const college = getProgramPlanCollege(plan);
+    const group = groupMap.get(college) ?? [];
+    group.push(plan);
+    groupMap.set(college, group);
+  });
+  return [...groupMap.entries()];
+}
+
 const PHYSICAL_ELECTRONICS_CORE = [
   '半导体光谱学导论',
   '半导体工艺与制造技术',
@@ -98,6 +150,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     label: '物理电子学 · 学硕',
     degree: '学术型硕士',
     program: '物理电子学',
+    college: '物理与光电工程学院',
     code: '0809 电子科学与技术',
     totalCredits: 30,
     publicRequiredCredits: 7,
@@ -118,6 +171,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     label: '光电信息工程 · 专硕',
     degree: '专业型硕士',
     program: '光电信息工程',
+    college: '物理与光电工程学院',
     code: '085408 光电信息工程',
     totalCredits: 25,
     publicRequiredCredits: 8,
@@ -157,6 +211,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     label: '人工智能 · 专硕',
     degree: '专业型硕士',
     program: '人工智能',
+    college: '智能科学与技术学院',
     code: '085410 人工智能',
     totalCredits: 25,
     publicRequiredCredits: 8,
@@ -193,6 +248,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     label: '材料工程 · 专硕',
     degree: '专业型硕士',
     program: '材料工程',
+    college: '化学与材料科学学院',
     code: '085601 材料工程',
     totalCredits: 25,
     publicRequiredCredits: 8,
@@ -227,6 +283,7 @@ export const PROGRAM_PLANS: ProgramPlan[] = [
     label: '物理电子学 · 博士',
     degree: '博士',
     program: '物理电子学',
+    college: '物理与光电工程学院',
     code: '0809 电子科学与技术',
     totalCredits: 38,
     publicRequiredCredits: 11,

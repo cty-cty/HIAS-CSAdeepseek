@@ -642,7 +642,7 @@ export function calculateSemesterCheckup(
       ? `当前 ${gaps.professionalNonDegreeCredits} / ${gaps.professionalNonDegreeTarget}，已满足。`
       : gaps.professionalNonDegreeTarget === null
         ? '当前值待核验：材料未明确（学硕/博士通常不限）。'
-        : `当前 ${gaps.professionalNonDegreeCredits} / ${gaps.professionalNonDegreeTarget}；科学前沿讲座与 HIAS讲堂均可计入该学分（均不计入学期10学分门槛）。`,
+        : `当前 ${gaps.professionalNonDegreeCredits} / ${gaps.professionalNonDegreeTarget}；科学前沿讲座可计入该学分（不计入学期10学分门槛）。`,
     action: nonDegreeDone || gaps.professionalNonDegreeTarget === null ? undefined : '培养方案进度，非本学期选课错误。',
     counted: gaps.professionalNonDegreeCredits,
     target: gaps.professionalNonDegreeTarget,
@@ -668,7 +668,7 @@ export function calculateSemesterCheckup(
       ? `当前 ${gaps.publicElectiveCredits} / ${gaps.publicElectiveTarget}，已满足。`
       : gaps.publicElectiveTarget === null
         ? '当前值待核验。'
-        : `当前 ${gaps.publicElectiveCredits} / ${gaps.publicElectiveTarget}（体系合计——专硕的创新创业模块已包含在内，不理解为两套要求相加；不含 HIAS讲堂，讲堂学分计入专业非学位课）。`,
+        : `当前 ${gaps.publicElectiveCredits} / ${gaps.publicElectiveTarget}（体系合计——专硕的创新创业模块已包含在内，不理解为两套要求相加；HIAS讲堂按公共选修课计入本体系）。`,
     action:
       publicElectiveDone || gaps.publicElectiveTarget === null
         ? undefined

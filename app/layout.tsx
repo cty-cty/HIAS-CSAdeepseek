@@ -3,7 +3,7 @@ import './globals.css';
 import OfflineRegistration from './offline-registration';
 
 export const metadata: Metadata = {
-  title: 'HIAS-CSA · 2026 秋季预选课助手',
+  title: 'DeepSeek Harness Desktop',
   description:
     '仅面向国科大杭州高等研究院 2026 级研一新生的秋季预选课辅助工具，支持课程筛选、选课方案体检、学位课属性、培养方案核对、课表模拟与冲突检测。',
   manifest: '/manifest.webmanifest',

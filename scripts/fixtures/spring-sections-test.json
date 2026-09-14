@@ -1,0 +1,72 @@
+{
+  "_comment": "合成测试夹具，仅供自动化回归使用。这里的两条记录是按同一门课的两个正式教学班人工构造的，不是 2027 春季正式课表，也不进入页面内置课程数据。",
+  "termId": "2027-spring",
+  "label": "2027 春季（合成测试夹具）",
+  "audience": "仅用于测试，不代表任何正式排课",
+  "courses": [
+    {
+      "id": "fixture-fpga-01",
+      "code": "280216085408P3005-01",
+      "officialCode": "280216085408P3005-01",
+      "name": "FPGA电路软硬件设计",
+      "englishName": "Hardware and Software Design of FPGA",
+      "college": "物理与光电工程学院",
+      "category": "专业课",
+      "level": "硕博通用课程",
+      "subject": "光电信息工程",
+      "hours": "40",
+      "credits": 2.5,
+      "capacity": 30,
+      "enrolled": 0,
+      "teachingMode": "课堂讲授为主",
+      "examMode": "课堂开卷",
+      "teacher": "测试教师甲",
+      "schedules": [
+        {
+          "day": "周二",
+          "dayIndex": 1,
+          "start": 5,
+          "end": 7,
+          "weeks": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          "weeksText": "第3-12周",
+          "periodText": "周二(5-7)",
+          "room": "13-101"
+        }
+      ],
+      "scheduleStatus": "confirmed",
+      "dataStatus": "official_schedule"
+    },
+    {
+      "id": "fixture-fpga-02",
+      "code": "280216085408P3005-02",
+      "officialCode": "280216085408P3005-02",
+      "name": "FPGA电路软硬件设计",
+      "englishName": "Hardware and Software Design of FPGA",
+      "college": "物理与光电工程学院",
+      "category": "专业课",
+      "level": "硕博通用课程",
+      "subject": "光电信息工程",
+      "hours": "40",
+      "credits": 2.5,
+      "capacity": 30,
+      "enrolled": 0,
+      "teachingMode": "课堂讲授为主",
+      "examMode": "课堂开卷",
+      "teacher": "测试教师乙",
+      "schedules": [
+        {
+          "day": "周四",
+          "dayIndex": 3,
+          "start": 5,
+          "end": 7,
+          "weeks": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          "weeksText": "第3-12周",
+          "periodText": "周四(5-7)",
+          "room": "13-102"
+        }
+      ],
+      "scheduleStatus": "confirmed",
+      "dataStatus": "official_schedule"
+    }
+  ]
+}

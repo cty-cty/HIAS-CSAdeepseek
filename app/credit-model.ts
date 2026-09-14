@@ -323,7 +323,7 @@ export function getCourseRoleEligibility(
   if (isHiasCourse(course)) {
     return {
       status: 'ineligible',
-      reason: 'HIAS讲堂（人文系列讲座）按专业非学位课（专业选修）登记，不能设置为学位课。',
+      reason: 'HIAS讲堂（人文系列讲座）按公共选修课学分登记，不能设置为学位课。',
     };
   }
   if (isPublicRequiredCourse(course)) {
@@ -507,9 +507,11 @@ export function getCourseRequirementType(
     return 'publicRequiredNonDegree';
   }
   if (isHiasCourse(course)) {
-    // HIAS讲堂（人文系列讲座）：专业非学位课（专业选修）——可计入“专业非学位课”学分，
-    // 不计入公共选修体系，也不计入秋/春季最低10学分的有效学分（有效学分口径见 UI/引擎侧过滤）。
-    return 'professionalElective';
+    // HIAS讲堂（人文系列讲座）：按公共选修课学分登记，计入“公共选修体系”学分，
+    // 不计入秋/春季最低10学分的有效学分（有效学分口径见 UI/引擎侧过滤）。
+    // 口径来源：参照参考版 HIAS-CSA 核对学校选课须知后的结论——讲堂归公共选修，
+    // 科学前沿讲座归专业非学位，两者都不计入学期最低 10 学分。
+    return 'publicElective';
   }
   if (isPublicRequiredCourse(course)) {
     return designation === 'non-degree'

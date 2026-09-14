@@ -2,7 +2,19 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
+/* DeepSeek Harness desktop workspace */
+/* 注意：本区块是 DeepSeek 桌面页的独立样式，新增类名一律带 `dsh-` 前缀。
+   历史上这里把装饰圆环命名为 .ring-1 / .ring-2，与 Tailwind 的 ring-1 / ring-2
+   工具类同名；未分层的全局类会盖住 @layer utilities，于是所有带 ring-1 的
+   shadcn 组件（DialogContent、AlertDialogContent 等）被强行套上
+   `width:225px;height:225px;transform:rotate(27deg) skew(-8deg)`，
+   表现为「培养设置」等弹窗整体歪斜。已改名 dsh-ring-1 / dsh-ring-2，勿再回退。 */
+.dsh-shell { min-height:100vh; display:flex; color:#e8edf4; background:#101214; font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; letter-spacing:-.01em; }
+.dsh-sidebar { width:238px; flex:none; padding:25px 14px 18px; border-right:1px solid #272b31; background:#151719; display:flex; flex-direction:column; }
+.dsh-brand { display:flex; gap:11px; align-items:center; padding:0 12px 31px; }.dsh-mark{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:#f5f7fa;color:#151719;font-weight:800;font-size:13px;}.dsh-brand strong,.dsh-brand span{display:block}.dsh-brand strong{font-size:14px}.dsh-brand span{color:#7d858f;font-size:11px;margin-top:2px}.dsh-workspace-label,.dsh-eyebrow{font-size:10px;letter-spacing:.14em;color:#747d88;font-weight:700}.dsh-workspace-label{padding:0 12px 9px}.dsh-workspace,.dsh-nav button,.dsh-sidebar-bottom button,.dsh-sidebar-bottom a{width:100%;display:flex;align-items:center;gap:10px;border:0;background:none;color:#9ea6b1;text-align:left;padding:10px 12px;border-radius:8px;font-size:13px;text-decoration:none;cursor:pointer}.dsh-workspace{background:#202329;color:#e4e8ed;margin-bottom:22px}.dsh-folder{color:#d6a44c;display:flex}.dsh-ellipsis{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.dsh-nav{display:grid;gap:3px}.dsh-nav button.selected{background:#2a2f36;color:#f5f7fa}.dsh-nav button:hover,.dsh-sidebar-bottom button:hover,.dsh-sidebar-bottom a:hover{background:#202329;color:#fff}.dsh-nav em{margin-left:auto;background:#343a43;color:#c4cbd4;padding:2px 7px;border-radius:20px;font-style:normal;font-size:10px}.dsh-sidebar-bottom{margin-top:auto;display:grid;gap:3px}.dsh-main{flex:1;min-width:0}.dsh-topbar{height:86px;border-bottom:1px solid #272b31;display:flex;align-items:center;justify-content:space-between;padding:0 44px}.dsh-kicker{font-size:10px;color:#78818d;letter-spacing:.14em;font-weight:700}.dsh-topbar h1{font-size:18px;margin:7px 0 0;letter-spacing:-.03em}.dsh-status{display:flex;align-items:center;gap:9px;font-size:12px;color:#858e99}.dsh-status>span{width:7px;height:7px;border-radius:50%;background:#65707d}.dsh-outline{border:1px solid #363c45;border-radius:6px;color:#c7cdd5;background:#1b1e22;padding:7px 12px;font-size:11px;margin-left:8px}.dsh-content{max-width:1240px;margin:0 auto;padding:39px 44px 60px}.dsh-hero{min-height:245px;border:1px solid #30343b;border-radius:12px;padding:32px 38px;display:flex;justify-content:space-between;overflow:hidden;background:radial-gradient(circle at 85% 48%,#1c252c 0,#17191d 39%,#17191d 100%);position:relative}.dsh-pill{display:inline-flex;align-items:center;gap:6px;color:#d8b166;background:#332c1d;border:1px solid #564623;border-radius:20px;font-size:10px;padding:5px 9px}.dsh-hero h2{font-size:29px;line-height:1.18;letter-spacing:-.05em;margin:15px 0 9px}.dsh-hero h2 span{color:#aeb7c3}.dsh-hero p{color:#818a96;font-size:13px;max-width:475px;line-height:1.7;margin:0}.dsh-hero-actions{display:flex;align-items:center;gap:17px;margin-top:22px}.dsh-primary,.dsh-run{border:0;background:#e8edf2;color:#17191c;border-radius:7px;padding:10px 14px;font-weight:700;font-size:12px;display:inline-flex;gap:8px;align-items:center;cursor:pointer}.dsh-primary:hover,.dsh-run:hover{background:white}.dsh-link{color:#9da7b3;font-size:12px;display:flex;gap:6px;align-items:center;text-decoration:none}.dsh-orbit{width:280px;position:relative}.dsh-orbit-ring{position:absolute;border:1px solid #364751;border-radius:50%;left:25px;top:5px}.dsh-ring-1{width:225px;height:225px;transform:rotate(27deg) skew(-8deg)}.dsh-ring-2{width:175px;height:175px;left:50px;top:30px;transform:rotate(-34deg) skew(14deg);border-color:#5d4f30}.dsh-orbit-core{position:absolute;left:114px;top:95px;width:46px;height:46px;border-radius:14px;background:#edf1f5;color:#1c2024;display:grid;place-items:center;font-weight:800;font-size:14px;box-shadow:0 0 38px #81939a55}.dsh-orbit-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:#be9249}.dot-a{top:39px;right:30px}.dot-b{bottom:26px;left:29px;background:#6d8791}.dsh-grid{display:grid;grid-template-columns:1fr 1.12fr;gap:15px;margin-top:15px}.dsh-card{border:1px solid #2d3239;border-radius:11px;background:#17191c;padding:22px}.dsh-card-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}.dsh-card h3{font-size:16px;margin:6px 0 0;letter-spacing:-.03em}.dsh-live{font-size:10px;color:#9ba4af;display:flex;align-items:center;gap:6px}.dsh-live span{width:6px;height:6px;border-radius:50%;background:#b78d4a}.dsh-config label{display:block;color:#89929e;font-size:11px;margin:14px 0 0}.dsh-config select,.dsh-config input,.dsh-config textarea{width:100%;background:#202329;border:1px solid #313740;color:#dce1e7;border-radius:6px;padding:10px;margin-top:7px;font:inherit;font-size:12px;outline:none}.dsh-config textarea{height:76px;resize:vertical;line-height:1.5}.dsh-config select:focus,.dsh-config input:focus,.dsh-config textarea:focus{border-color:#6f7c8b}.dsh-input-icon{position:relative}.dsh-input-icon svg{position:absolute;top:17px;left:10px;color:#8994a1}.dsh-input-icon input{padding-left:31px}.dsh-run{margin-top:17px;width:100%;justify-content:center}.dsh-console p,.dsh-bottom-card p{font-size:12px;line-height:1.7;color:#818a96;margin:0 0 18px}.dsh-muted{color:#7e8792}.dsh-command{display:flex;align-items:center;gap:10px;background:#0f1113;border:1px solid #292e34;border-radius:7px;padding:12px;color:#8d9aa6}.dsh-command code{flex:1;color:#d6dce2;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}.dsh-command button{background:none;border:0;color:#8d9aa6;cursor:pointer}.dsh-note{display:flex;align-items:center;gap:6px;margin:16px 0 18px;color:#818a96;font-size:11px}.dsh-note code{color:#c9d0d8;font:11px ui-monospace,monospace}.dsh-note-dot{width:6px;height:6px;border-radius:50%;background:#6c9b7a}.dsh-divider{height:13px;border-left:1px solid #394049;margin:0 6px}.dsh-log{border-top:1px solid #292e34;padding-top:13px;color:#a9b1bb;font:11px ui-monospace,monospace;line-height:2}.log-time{color:#66717e;margin-right:13px}.log-ok{color:#87ad8d;margin-right:7px}.log-gray{color:#68727e;margin-right:7px}.dsh-bottom-card{margin-top:15px;display:flex;align-items:center;gap:30px;padding:22px}.dsh-bottom-card h3{margin:6px 0}.dsh-bottom-card p{margin:5px 0 0;max-width:520px}.dsh-stats{margin-left:auto;display:flex;gap:38px}.dsh-stats div{display:grid;gap:5px}.dsh-stats strong{font-size:22px;color:#dce2e8}.dsh-stats span{font-size:10px;color:#747e89}.dsh-icon-button{border:1px solid #37404a;background:#20252b;color:#b7c0ca;width:35px;height:35px;border-radius:7px;display:grid;place-items:center;cursor:pointer}@media(max-width:850px){.dsh-sidebar{width:65px;padding:20px 8px}.dsh-brand>div:last-child,.dsh-workspace-label,.dsh-workspace span:not(.dsh-folder),.dsh-workspace>svg,.dsh-nav button:not(.selected)::after,.dsh-nav button{font-size:0;justify-content:center}.dsh-nav button svg,.dsh-sidebar-bottom svg{margin:0}.dsh-sidebar-bottom button,.dsh-sidebar-bottom a{justify-content:center}.dsh-hero{padding:27px}.dsh-orbit{display:none}.dsh-content{padding:24px}.dsh-grid{grid-template-columns:1fr}.dsh-stats{gap:15px}.dsh-topbar{padding:0 24px}}
 @custom-variant dark (&:is(.dark *));
+
+.dsh-status>span.ready{background:#74a77b;box-shadow:0 0 0 3px #74a77b20}.dsh-outline{display:inline-flex;align-items:center;gap:6px;cursor:pointer}.dsh-sessions{margin-top:15px;padding:22px}.dsh-sessions .dsh-card-head{margin-bottom:8px}.dsh-text-button{border:0;background:none;color:#8c98a5;display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer}.dsh-session-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #292e34}.dsh-session-icon{width:29px;height:29px;border-radius:7px;background:#27323a;color:#9fb1bc;display:grid;place-items:center}.dsh-session-icon.gold{background:#352d20;color:#c7a05a}.dsh-session-copy{display:grid;gap:4px;flex:1}.dsh-session-copy strong{font-size:12px;color:#d5dbe2;font-weight:600}.dsh-session-copy span{font-size:10px;color:#747f8b}.dsh-session-status{font-size:10px;color:#8c97a2}
 
 @theme inline {
   --color-background: var(--background);
@@ -4004,6 +4016,185 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .degree-rule-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 意见反馈 / 留言：左侧写留言、右侧本机记录，沿用数据管理页的绿色卡片体系。
+   站点是纯静态部署，没有后端，所以这里只做“本机留档 + 带到 GitHub Issue”。 */
+.feedback-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.feedback-field {
+  display: block;
+  margin-top: 1rem;
+  border: 0;
+  padding: 0;
+}
+
+.feedback-field > span,
+.feedback-field > legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  color: #35584f;
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.feedback-field em {
+  color: #8b9a95;
+  font-size: 0.75rem;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.feedback-detail-input {
+  min-height: 9rem;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.feedback-category-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.feedback-category-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-height: 3.5rem;
+  padding: 0.7rem;
+  border: 1px solid #dce3ed;
+  border-radius: 12px;
+  color: #35584f;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.feedback-category-option:has([data-checked]) {
+  border-color: #7f9fc9;
+  background: #edf2fa;
+}
+
+.feedback-category-option small,
+.feedback-context-toggle small {
+  display: block;
+  margin-top: 0.2rem;
+  color: #7d8e87;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.feedback-context-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  border: 1px solid #dce3ed;
+  border-radius: 12px;
+  padding: 0.7rem;
+  color: #35584f;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.feedback-fallback {
+  margin-top: 0.6rem;
+  color: #4b5f59;
+  font-size: 0.8125rem;
+}
+
+.feedback-fallback a,
+.feedback-issues-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #234c89;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.feedback-fallback svg,
+.feedback-issues-link svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.feedback-entry-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.feedback-entry {
+  border: 1px solid #e3eae7;
+  border-radius: 14px;
+  background: #fafcfb;
+  padding: 0.8rem;
+}
+
+.feedback-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.feedback-entry-head strong {
+  color: #35584f;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.feedback-entry-meta {
+  margin-top: 0.35rem;
+  color: #7d8e87;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.feedback-entry-detail {
+  margin-top: 0.5rem;
+  max-height: 9rem;
+  overflow-y: auto;
+  border-left: 3px solid #cfe0da;
+  padding-left: 0.6rem;
+  color: #40534d;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.feedback-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+@media (max-width: 900px) {
+  .feedback-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .feedback-category-group {
     grid-template-columns: minmax(0, 1fr);
   }
 }

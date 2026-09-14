@@ -12,7 +12,7 @@ export default function OfflineRegistration() {
     }
 
     const register = () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+      navigator.serviceWorker.register('./sw.js').catch(() => undefined);
     };
 
     if (document.readyState === 'complete') {

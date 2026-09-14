@@ -266,6 +266,14 @@ export type RecommendationRequest = {
   plan: ProgramPlan;
   track?: StudentTrack;
   historicalRecords?: HistoricalRecord[];
+  /**
+   * 其它学期（前序 / 后续）的已选课程。
+   *
+   * 培养进度是「历史已修 + 各学期已选」的跨学期累计口径，与体检保持一致：
+   * 这些课程既不能在当前学期被重复推荐，也要计入推荐方案的培养缺口投影；
+   * 但**不参与**当前学期的排课冲突与学期有效学分（学期口径仍只看当前学期）。
+   */
+  otherTermCourses?: CourseRecord[];
   designations: Record<string, CourseDesignation>;
   exemptionStatus?: ExemptionStatus;
   /** 当前学期最低有效学分（秋/春 10，夏 null）。 */
@@ -316,6 +324,7 @@ export function buildCandidates(request: RecommendationRequest): Candidate[] {
     plan,
     excludedIds = [],
     historicalRecords = [],
+    otherTermCourses = [],
     exemptionStatus = 'normal',
   } = request;
   const selectedCanonical = new Set(
@@ -333,6 +342,10 @@ export function buildCandidates(request: RecommendationRequest): Candidate[] {
         }),
       ),
   );
+  // 其它学期已选：培养进度累计口径下，同一门课不在当前学期重复推荐
+  const otherTermCanonical = new Set(
+    otherTermCourses.map((course) => canonicalCourseId(course)),
+  );
   const selectedSportsCount = selectedCourses.filter(
     (course) => course.subject === '体育学',
   ).length;
@@ -346,6 +359,7 @@ export function buildCandidates(request: RecommendationRequest): Candidate[] {
     const key = canonicalCourseId(course);
     if (selectedCanonical.has(key)) continue; // 同课不同班已选
     if (historyCanonical.has(key)) continue; // 该课程已计入前序学期/历史
+    if (otherTermCanonical.has(key)) continue; // 其它学期已规划同一门课
     // 英语免修免考已获批：英语类课程视为已获学分，不再作为候选
     if (exemptionStatus === 'approved' && isEnglishCourseRecord(course)) continue;
     const list = groups.get(key) ?? [];
@@ -401,8 +415,8 @@ export function buildCandidates(request: RecommendationRequest): Candidate[] {
     if (isEngineeringEthics(courseLike)) {
       roles.push('public-required-non-degree');
     } else if (isHiasCourse(courseLike)) {
-      // HIAS讲堂：专业非学位课（专业选修），可补“专业非学位课”学分
-      roles.push('professional-elective');
+      // HIAS讲堂：按公共选修课登记，可补“公共选修体系”学分
+      roles.push('public-elective');
     } else if (isPublicRequiredCourse(courseLike)) {
       roles.push(
         requirementType === 'publicRequiredNonDegree'
@@ -503,8 +517,15 @@ export function projectState(
   track: StudentTrack | undefined,
   semesterTarget: number | null,
   springPlannedCourseNames: string[],
+  /** 其它学期已选课程：计入培养进度累计，但不计入本学期有效学分。 */
+  otherTermCourses: CourseRecord[] = [],
 ): ProjectedState {
   const courseLikes = targetCourses.map(toCourseLike);
+  /** 培养进度累计集合 = 其它学期已选 + 当前学期已选/拟加入。 */
+  const cumulativeLikes = [
+    ...otherTermCourses.map(toCourseLike),
+    ...courseLikes,
+  ];
   const designationMap = { ...designations };
   targetCourses.forEach((course) => {
     const designation = makeDesignationOnAdd(course, plan);
@@ -515,14 +536,14 @@ export function projectState(
   });
 
   const summary = calculateCreditSummary({
-    selectedCourses: courseLikes,
+    selectedCourses: cumulativeLikes,
     designations: designationMap,
     historicalRecords,
     exemptionStatus,
     plan,
   });
   const counts = getPlanCourseCounts({
-    courses: courseLikes,
+    courses: cumulativeLikes,
     plan,
     designations: designationMap,
     historicalRecords,
@@ -544,7 +565,7 @@ export function projectState(
     .reduce((sum, course) => sum + course.credits, 0);
 
   const confirmedDegreeNames = collectConfirmedDegreeNames(
-    targetCourses,
+    [...otherTermCourses, ...targetCourses],
     historicalRecords,
     plan,
     designationMap,
@@ -737,6 +758,7 @@ export function generateRecommendationPlans(
     track,
     designations,
     historicalRecords = [],
+    otherTermCourses = [],
     exemptionStatus = 'normal',
     semesterTarget,
     springPlannedCourseNames = [],
@@ -753,6 +775,7 @@ export function generateRecommendationPlans(
     track,
     semesterTarget,
     springPlannedCourseNames,
+    otherTermCourses,
   );
   const mandatoryMissing = missingMandatoryForPlan(request, locked);
   const modes: PlanMode[] = ['requirement-first', 'balanced', 'compact'];
@@ -786,6 +809,7 @@ export function generateRecommendationPlans(
               track,
               semesterTarget,
               springPlannedCourseNames,
+              otherTermCourses,
             )
           : initialProjection;
       const gaps = projection.gaps;
@@ -868,6 +892,7 @@ export function generateRecommendationPlans(
           track,
           semesterTarget,
           springPlannedCourseNames,
+          otherTermCourses,
         )
       : initialProjection;
 

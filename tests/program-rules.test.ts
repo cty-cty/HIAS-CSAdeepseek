@@ -256,7 +256,7 @@ gaps = calculateProgramGaps({
 });
 ok(gaps.specialRules[0]?.satisfied === true, 'S4 AI 含自然语言处理 → 特殊核心规则通过');
 
-// 5) HIAS讲堂 → 专业非学位课 +1（专业选修），公共选修 +0
+// 5) HIAS讲堂 → 公共选修体系 +1，专业非学位 +0
 const hiasCourse = mkCourse({
   name: 'HIAS讲堂',
   code: 'HIAS-LECTURE',
@@ -264,7 +264,7 @@ const hiasCourse = mkCourse({
   module: 'hias',
   credits: 1,
 });
-eq(getCourseRequirementType(hiasCourse, 'non-degree', materials), 'professionalElective', 'S5 HIAS 归属 professionalElective');
+eq(getCourseRequirementType(hiasCourse, 'non-degree', materials), 'publicElective', 'S5 HIAS 归属 publicElective');
 const summaryHias = calculateCreditSummary({
   selectedCourses: [hiasCourse],
   designations: {},
@@ -272,8 +272,8 @@ const summaryHias = calculateCreditSummary({
   exemptionStatus: 'normal',
   plan: materials,
 });
-ok(summaryHias.publicElectiveCredits === 0, 'S5 HIAS 公共选修 +0');
-ok(summaryHias.professionalElectiveCredits === 1, 'S5 HIAS 专业非学位 +1');
+ok(summaryHias.publicElectiveCredits === 1, 'S5 HIAS 公共选修 +1');
+ok(summaryHias.professionalElectiveCredits === 0, 'S5 HIAS 专业非学位 +0');
 ok(summaryHias.professionalDegreeCredits === 0, 'S5 HIAS 专业学位 +0');
 // 6) 科学前沿讲座 → 专业选修 +1，公共选修 +0
 const frontierCourse = mkCourse({
@@ -427,8 +427,9 @@ gaps = calculateProgramGaps({
 });
 ok(summaryPubPlusInnovation.innovationCredits === 1, 'S18 创新模块 1 学分');
 ok(!(gaps.publicElectiveTarget !== null && gaps.publicElectiveCredits < gaps.publicElectiveTarget), 'S18b 公选2+创新1 → 体系3分满足');
-// 19/20) HIAS 不能补专业非学位2分；前沿可以
-ok(summaryHias.professionalElectiveCredits === 1, 'S19 HIAS 可计入专业非学位课学分（可补 2 分）');
+// 19/20) HIAS 计入公共选修体系（不补专业非学位）；前沿补专业非学位
+ok(summaryHias.publicElectiveCredits === 1, 'S19 HIAS 计入公共选修体系学分');
+ok(summaryHias.professionalElectiveCredits === 0, 'S19b HIAS 不补专业非学位学分');
 ok(summaryFrontier.professionalElectiveCredits === 1, 'S20 前沿可入专业非学位');
 // 21) 核心已2/2 后推荐不因“核心课”无脑再推核心
 const engCourses: CourseRecord[] = [
@@ -465,6 +466,23 @@ for (const plan of withSelected.plans) {
     'S22 锁定课程不会被推荐删除/替换',
   );
 }
+// 25) 其它学期已选的同一门课，不在当前学期重复推荐（培养进度=跨学期累计）
+const crossTermCandidates = buildCandidates({
+  ...engRequest,
+  otherTermCourses: [engCourses[0]],
+});
+ok(
+  !crossTermCandidates.some((candidate) =>
+    candidate.sections.some((section) => section.id === 'c1'),
+  ),
+  'S25 其它学期已规划的课程不再作为当前学期候选',
+);
+ok(
+  buildCandidates(engRequest).some((candidate) =>
+    candidate.sections.some((section) => section.id === 'c1'),
+  ),
+  'S25b 未传其它学期课程时同一门课仍可候选（对照）',
+);
 // 23/24) 多班次只作为一门课程出现且可选无冲突班次
 const multiSections: CourseRecord[] = [
   engCourses[0],

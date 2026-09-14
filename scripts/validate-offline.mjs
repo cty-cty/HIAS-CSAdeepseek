@@ -25,7 +25,8 @@ const documentShell = html.slice(0, html.indexOf('<script>'));
 
 if (/<script\b[^>]*\bsrc=/i.test(documentShell))
   failures.push('仍包含外部脚本');
-if (/<link\b[^>]*\bhref=/i.test(documentShell)) failures.push('仍包含外部样式');
+if (/<link\b[^>]*rel=["']stylesheet["'][^>]*href=/i.test(documentShell))
+  failures.push('仍包含外部样式');
 if (html.includes('hias-logo-white.png')) failures.push('仍包含官方 Logo 资源');
 if (html.includes('process.env.NODE_ENV'))
   failures.push('仍包含浏览器无法识别的环境变量');

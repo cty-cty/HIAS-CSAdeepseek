@@ -25,15 +25,19 @@ import {
   ChevronDown,
   ClipboardCheck,
   Clock3,
+  Copy,
   Download,
+  ExternalLink,
   FileSpreadsheet,
   GraduationCap,
   Info,
   MapPin,
+  MessageSquarePlus,
   Presentation,
   Repeat2,
   RefreshCw,
   Search,
+  Send,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -48,8 +52,10 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   Collapsible,
@@ -68,6 +74,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   NativeSelect,
+  NativeSelectOptGroup,
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import {
@@ -85,7 +92,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { PROGRAM_PLANS, type ProgramPlan } from '@/app/program-plans';
+import {
+  COLLEGE_DIRECTORY,
+  FALLBACK_PROGRAM_PLAN_COLLEGE,
+  PROGRAM_PLANS,
+  getProgramPlanCollege,
+  groupProgramPlansByCollege,
+  type ProgramPlan,
+} from '@/app/program-plans';
+import {
+  reconcileCourseUpdate,
+  type CourseDataRow,
+} from '@/app/course-data';
 import {
   calculateCreditSummary,
   courseBaseName,
@@ -119,6 +137,34 @@ import {
   calculateSemesterCheckup,
   type SemesterCheckup,
 } from './program-rules';
+import {
+  EMPTY_FEEDBACK_DRAFT,
+  FEEDBACK_CATEGORIES,
+  FEEDBACK_ISSUES_URL,
+  FEEDBACK_MAX_CONTACT,
+  FEEDBACK_MAX_DETAIL,
+  FEEDBACK_MAX_ENTRIES,
+  FEEDBACK_MAX_TITLE,
+  FEEDBACK_STORAGE_KEY,
+  buildIssueUrl,
+  createFeedbackEntry,
+  feedbackExportFileName,
+  formatFeedbackEntryStatus,
+  formatFeedbackEntryText,
+  formatFeedbackExport,
+  formatFeedbackTime,
+  getFeedbackCategory,
+  isIssueUrlTooLong,
+  markFeedbackSubmitted,
+  parseFeedbackEntries,
+  removeFeedbackEntry,
+  serializeFeedbackEntries,
+  upsertFeedbackEntry,
+  validateFeedbackDraft,
+  type FeedbackContext,
+  type FeedbackDraft,
+  type FeedbackEntry,
+} from './feedback';
 import {
   buildCandidates,
   collectConfirmedDegreeNames,
@@ -903,7 +949,7 @@ export default function CourseExplorer({
   const [onlySelected, setOnlySelected] = useState(false);
   const [onlyNoConflict, setOnlyNoConflict] = useState(false);
   const [view, setViewState] = useState<
-    'courses' | 'guide' | 'notice' | 'exams' | 'data'
+    'courses' | 'guide' | 'notice' | 'exams' | 'data' | 'feedback'
   >('courses');
   const [timetableOpen, setTimetableOpen] = useState(false);
   const [customProgramPlans, setCustomProgramPlans] = useState<ProgramPlan[]>(
@@ -976,6 +1022,20 @@ export default function CourseExplorer({
     term: '',
     attendanceCount: '',
   });
+  /**
+   * 意见反馈 / 留言：正文只写本机 localStorage（hias-feedback-v1），不会自动上传；
+   * “提交”= 打开预填好标题与正文的 GitHub 新建 Issue 页面，由用户自己确认提交。
+   * 纯静态站没有后端，详见 app/feedback.ts 顶部说明。
+   */
+  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntry[]>([]);
+  const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft>({
+    ...EMPTY_FEEDBACK_DRAFT,
+  });
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [feedbackError, setFeedbackError] = useState('');
+  const [copiedFeedbackId, setCopiedFeedbackId] = useState('');
+  /** 最近一次生成的 GitHub 提交页地址，用于弹窗被拦截时的手动兜底链接。 */
+  const [lastFeedbackUrl, setLastFeedbackUrl] = useState('');
   const dataFileRef = useRef<HTMLInputElement>(null);
   const programPlanFileRef = useRef<HTMLInputElement>(null);
   const backupFileRef = useRef<HTMLInputElement>(null);
@@ -1027,6 +1087,28 @@ export default function CourseExplorer({
     );
     return [...planMap.values()];
   }, [customProgramPlans]);
+  // 培养方向选择器的一级分组：顺序沿用 COLLEGE_DIRECTORY（未导入方案的学院作为占位，避免目录里
+  // 的学院凭空消失），不在目录里的自定义学院/兜底分组按数据出现顺序追加。全部分组由
+  // groupProgramPlansByCollege（内部走 getProgramPlanCollege）自动生成，组件内不硬编码学院名单。
+  const programPlanGroups = useMemo(() => {
+    const groupedPlans = new Map(
+      groupProgramPlansByCollege(availableProgramPlans),
+    );
+    const directoryLabels = new Set(
+      COLLEGE_DIRECTORY.map((entry) => entry.label),
+    );
+    const groups = COLLEGE_DIRECTORY.map(({ id, label }) => ({
+      id,
+      label,
+      plans: groupedPlans.get(label) ?? [],
+    }));
+    [...groupedPlans.entries()]
+      .filter(([label]) => !directoryLabels.has(label))
+      .forEach(([label, plans]) => {
+        groups.push({ id: `custom-${label}`, label, plans });
+      });
+    return groups;
+  }, [availableProgramPlans]);
 
   useEffect(() => {
     selectedIdsRef.current = selectedIds;
@@ -1057,6 +1139,7 @@ export default function CourseExplorer({
     const storedEnglishExemption = window.localStorage.getItem(
       ENGLISH_EXEMPTION_STORAGE_KEY,
     );
+    const storedFeedback = window.localStorage.getItem(FEEDBACK_STORAGE_KEY);
 
     let parsedDatasets: CourseDataset[] = [];
     if (storedDatasets) {
@@ -1242,6 +1325,7 @@ export default function CourseExplorer({
     setDesignationsByTerm(parsedDesignations);
     setHistoricalRecords(parsedHistoricalRecords);
     setEnglishExemptionStatus(parsedExemption);
+    setFeedbackEntries(parseFeedbackEntries(storedFeedback));
     setStorageReady(true);
     const needsInitialSetup =
       window.localStorage.getItem(INITIAL_SETTINGS_STORAGE_KEY) !== '1';
@@ -1293,6 +1377,21 @@ export default function CourseExplorer({
       englishExemptionStatus,
     );
   }, [englishExemptionStatus, historicalRecords, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    window.localStorage.setItem(
+      FEEDBACK_STORAGE_KEY,
+      serializeFeedbackEntries(feedbackEntries),
+    );
+  }, [feedbackEntries, storageReady]);
+
+  // 复制成功提示 2 秒后自动消失（保留列表里的留言本身）。
+  useEffect(() => {
+    if (!copiedFeedbackId) return;
+    const timer = window.setTimeout(() => setCopiedFeedbackId(''), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copiedFeedbackId]);
 
   const setSelectedIdsForActive = useCallback(
     (next: string[] | ((current: string[]) => string[])) => {
@@ -1372,70 +1471,63 @@ export default function CourseExplorer({
         (item) => item.id === dataset.id,
       );
       const previousSelectedIds = selectedByTerm[dataset.id] ?? [];
-      const previousSelectedCodes = new Set(
-        (previousDataset?.courses ?? [])
-          .filter((course) => previousSelectedIds.includes(course.id))
-          .map((course) => course.code),
-      );
-      const restoredIds = dataset.courses
-        .filter((course) => previousSelectedCodes.has(course.code))
-        .map((course) => course.id);
-      // 2027 春季：内置“计划课程”(sp1…)与导入的正式课表课程按
-      // officialCode → canonicalCourseId → 名称匹配升级，避免计划/正式重复显示。
+      const previousDesignations = designationsByTerm[dataset.id] ?? {};
       const isSpringTarget = dataset.id === '2027-spring';
-      let matchedPlannedCount = 0;
-      if (isSpringTarget) {
-        const plannedById = new Map(
-          springDefaultCourses.map((course) => [course.id, course]),
-        );
-        previousSelectedIds.forEach((oldId) => {
-          const planned = plannedById.get(oldId);
-          if (!planned) return;
-          const official = dataset.courses.find((course) => {
-            if (
-              course.officialCode &&
-              planned.officialCode &&
-              course.officialCode === planned.officialCode
-            ) {
-              return true;
-            }
-            return canonicalCourseId(course) === canonicalCourseId(planned);
-          });
-          if (official && !restoredIds.includes(official.id)) {
-            restoredIds.push(official.id);
-            matchedPlannedCount += 1;
-          }
-        });
-      }
+      /**
+       * 增量更新（口径见 app/course-data.ts）：
+       * - 同一门课的多个正式教学班分别保留，不会被合并成一条，导入后仍可换班；
+       * - 正式课表记录替换同课程的计划占位（内置春季计划课程由此升级，不再重复显示两份）；
+       * - 新数据里没有出现的旧课程与旧选课一律保留，并回报未匹配项；
+       * - 学位属性随课程身份迁移；同课程匹配到多个教学班时只提示，由用户确认。
+       */
+      const reconciled = reconcileCourseUpdate(
+        (previousDataset?.courses ?? []) as CourseDataRow[],
+        dataset.courses as CourseDataRow[],
+        previousSelectedIds,
+        previousDesignations,
+      );
+      const reconciledDataset = {
+        ...dataset,
+        courses: reconciled.courses as unknown as Course[],
+      };
+      // 选课 id 发生变化 = 计划记录被正式班次升级替换（原先的手工匹配逻辑已被上面的身份匹配取代）
+      const upgradedCount = previousDataset
+        ? reconciled.selectedIds.filter(
+            (id) => !previousSelectedIds.includes(id),
+          ).length
+        : 0;
+
       setUndoSelection(null);
       setSelectionMessage('');
       setCustomDatasets((current) => [
-        ...current.filter((item) => item.id !== dataset.id),
-        dataset,
+        ...current.filter((item) => item.id !== reconciledDataset.id),
+        reconciledDataset,
       ]);
-      setActiveTermId(dataset.id);
+      setActiveTermId(reconciledDataset.id);
       setSelectedByTerm((current) => ({
         ...current,
-        [dataset.id]: restoredIds,
+        [reconciledDataset.id]: reconciled.selectedIds,
+      }));
+      setDesignationsByTerm((current) => ({
+        ...current,
+        [reconciledDataset.id]: reconciled.designations,
       }));
       clearFilters();
       setDetailCourse(null);
-      const unmatchedCount = previousSelectedIds.filter(
-        (oldId) => !restoredIds.includes(oldId),
-      ).length;
       setDataMessage(
         '已加载“' +
-          dataset.label +
+          reconciledDataset.label +
           '”的 ' +
-          dataset.courses.length +
-          ` 门课程；按课程身份保留了 ${restoredIds.length} 门已选课程。` +
-          (isSpringTarget
-            ? matchedPlannedCount > 0
-              ? ` 其中 ${matchedPlannedCount} 门春季计划课程已与正式课表匹配升级，不再重复显示。`
-              : ' 内置春季计划课程与导入数据按编码/课程名匹配升级，具体以导入课表为准。'
+          reconciledDataset.courses.length +
+          ` 门课程；按课程身份保留了 ${reconciled.selectedIds.length} 门已选课程。` +
+          (isSpringTarget && upgradedCount > 0
+            ? ` 其中 ${upgradedCount} 门春季计划课程已与正式课表匹配升级，不再重复显示。`
             : '') +
-          (unmatchedCount > 0
-            ? ` ${unmatchedCount} 门课程因编码/课程身份未匹配而未恢复。`
+          (reconciled.sectionChoices.length > 0
+            ? ` 有 ${reconciled.sectionChoices.length} 门课程匹配到多个教学班，请确认班次：${reconciled.sectionChoices.join('；')}。`
+            : '') +
+          (reconciled.retainedUnmatched.length > 0
+            ? ` ${reconciled.retainedUnmatched.length} 门课程未在新数据中匹配，已按原样保留，不会丢失。`
             : ''),
       );
     } catch (error) {
@@ -1601,10 +1693,28 @@ export default function CourseExplorer({
     }
   }, [doctorTrack, storageReady]);
 
-  const colleges = useMemo(
-    () => [...new Set(initialCourses.map((course) => course.college))].sort(),
-    [initialCourses],
-  );
+  // 课程筛选的一级学院：先按 COLLEGE_DIRECTORY 的目录顺序（与培养方向菜单同一口径），
+  // 再追加课程数据里出现但目录未收录的学院（如公共课教学中心、科创中心）以及培养方案声明的学院。
+  // 兜底分组“其他培养方案”只是方案的归类桶、不是开课学院，不作为一级学院选项。
+  const colleges = useMemo(() => {
+    const directoryLabels = COLLEGE_DIRECTORY.map((entry) => entry.label);
+    const directoryLabelSet = new Set(directoryLabels);
+    const extraLabels = [
+      ...new Set([
+        ...initialCourses.map((course) => course.college),
+        ...programPlanGroups.map((group) => group.label),
+      ]),
+    ]
+      .filter(
+        (label) =>
+          Boolean(label) &&
+          label.trim().length > 0 &&
+          label !== FALLBACK_PROGRAM_PLAN_COLLEGE &&
+          !directoryLabelSet.has(label),
+      )
+      .sort();
+    return [...directoryLabels, ...extraLabels];
+  }, [initialCourses, programPlanGroups]);
   const categories = useMemo(
     () => [...new Set(initialCourses.map((course) => course.category))].sort(),
     [initialCourses],
@@ -1613,6 +1723,68 @@ export default function CourseExplorer({
     () => [...new Set(initialCourses.map((course) => course.subject))].sort(),
     [initialCourses],
   );
+  // 学科/专业筛选的二级数据：一级与 colleges 同源同序（学院目录 → 课程学院 → 方案学院），
+  // 二级 = 该学院“实际开课的专业” ∪ 该学院“培养方案声明的专业（plan.program）”。
+  // 没有 college 的自定义方案走 getProgramPlanCollege 的兜底，作为末位分组出现，不参与学院名硬编码。
+  const subjectGroups = useMemo(() => {
+    const programsByCollege = new Map<string, Set<string>>();
+    availableProgramPlans.forEach((plan) => {
+      const planCollege = getProgramPlanCollege(plan);
+      const programs = programsByCollege.get(planCollege) ?? new Set<string>();
+      programs.add(plan.program);
+      programsByCollege.set(planCollege, programs);
+    });
+    const subjectsByCollege = new Map<string, Set<string>>();
+    initialCourses.forEach((course) => {
+      const courseCollege = course.college?.trim();
+      if (!courseCollege) return;
+      const group = subjectsByCollege.get(courseCollege) ?? new Set<string>();
+      group.add(course.subject);
+      subjectsByCollege.set(courseCollege, group);
+    });
+    const orderedLabels = programsByCollege.has(FALLBACK_PROGRAM_PLAN_COLLEGE)
+      ? [...colleges, FALLBACK_PROGRAM_PLAN_COLLEGE]
+      : colleges;
+    return orderedLabels.map((label) => ({
+      id:
+        COLLEGE_DIRECTORY.find((entry) => entry.label === label)?.id ??
+        `custom-${label}`,
+      label,
+      items: [
+        ...new Set([
+          ...(subjectsByCollege.get(label) ?? new Set<string>()),
+          ...(programsByCollege.get(label) ?? new Set<string>()),
+        ]),
+      ].sort(),
+    }));
+  }, [availableProgramPlans, colleges, initialCourses]);
+  // “全部院系”时展示全部分组；选定某一学院时只展示该学院分组（其二级已经同时含开课专业与
+  // 方案声明专业），避免出现“在 A 学院下列出 B 学院专业”的错位。课程数据里没有归入任何
+  // 学院的学科兜底进“其他学科/专业”，保证旧数据下也不会筛不到课。
+  const visibleSubjectGroups = useMemo(() => {
+    if (college !== '全部院系') {
+      const activeGroup = subjectGroups.find(
+        (item) => item.label === college,
+      );
+      return activeGroup ? [activeGroup] : subjectGroups;
+    }
+    const groupedSubjects = new Set(
+      subjectGroups.flatMap((group) => group.items),
+    );
+    const otherSubjects = subjects.filter(
+      (item) => !groupedSubjects.has(item),
+    );
+    return otherSubjects.length > 0
+      ? [
+          ...subjectGroups,
+          {
+            id: 'other-subjects',
+            label: '其他学科/专业',
+            items: otherSubjects,
+          },
+        ]
+      : subjectGroups;
+  }, [college, subjectGroups, subjects]);
   const selectedCourses = useMemo(
     () => initialCourses.filter((course) => selectedIds.includes(course.id)),
     [initialCourses, selectedIds],
@@ -1621,6 +1793,9 @@ export default function CourseExplorer({
     availableProgramPlans.find((plan) => plan.id === programPlanId) ??
     availableProgramPlans[0] ??
     PROGRAM_PLANS[0];
+  // 当前培养方向所属学院；旧的自定义方案没有 college 时由 getProgramPlanCollege 兜底为
+  // “其他培养方案”，不抛错、不影响学分计算。
+  const activeProgramCollege = getProgramPlanCollege(activePlan);
   // 选定培养方案后，本专业核心课/专业课（学位课范围内）默认“学位课”：
   // 加入时立即自动标记；切换培养方案/学期时对当前已选补一次默认。仅当未手动设置过属性时生效。
   // oxlint-disable-next-line react/react-compiler -- 巨型组件本地抑制；规则引擎与规则数据保持确定性
@@ -2221,7 +2396,9 @@ export default function CourseExplorer({
   const smartRecommendation = useMemo<RecommendationResult | null>(() => {
     if (!recommendationDialogOpen) return null;
     if (!selectedCourses.length) return null;
-    // 培养进度口径包含其它学期已选与英语免修“已获得”：推荐缺口、学期课程去重与投影都要考虑
+    // 培养进度口径包含其它学期已选与英语免修“已获得”：推荐缺口、学期课程去重与投影都要考虑。
+    // otherTermCourses 用于两件事：不在当前学期重复推荐其它学期已规划的同一门课，
+    // 以及让推荐方案的培养缺口投影与体检一样按“历史 + 各学期已选”累计。
     const historyForProgram = [
       ...exemptionHistory,
       ...carriedHistoryRecords,
@@ -2234,6 +2411,7 @@ export default function CourseExplorer({
       plan: activePlan,
       track: effectiveTrack,
       historicalRecords: historyForProgram,
+      otherTermCourses: carriedTermCourses,
       designations: activeDesignations,
       exemptionStatus: englishExemptionStatus,
       semesterTarget: semesterMinimumTarget,
@@ -2263,6 +2441,7 @@ export default function CourseExplorer({
     activePlan,
     activeTermId,
     carriedHistoryRecords,
+    carriedTermCourses,
     effectiveTrack,
     englishExemptionStatus,
     exemptionHistory,
@@ -2568,6 +2747,15 @@ export default function CourseExplorer({
     URL.revokeObjectURL(url);
   }
 
+  function downloadText(fileName: string, text: string, type: string) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   function exportBackup() {
     const payload: BackupPayload = {
       version: BACKUP_VERSION,
@@ -2824,7 +3012,159 @@ export default function CourseExplorer({
     { value: 'exams', label: '考试压力', icon: BarChart3 },
     { value: 'notice', label: '选课须知', icon: Info },
     { value: 'data', label: '数据管理', icon: RefreshCw },
+    { value: 'feedback', label: '意见反馈', icon: MessageSquarePlus },
   ] as const;
+
+  /**
+   * 当前页面状态快照，用于留言里自动附带的环境信息。
+   * 只在用户点击保存/提交时调用（渲染期不读 window，避免静态预渲染报错）。
+   */
+  function currentFeedbackContext(): FeedbackContext {
+    const activeNav = navigation.find((item) => item.value === view);
+    return {
+      termLabel: `${activeDataset.label}（${activeTermId}）`,
+      programLabel: activePlan.label,
+      selectedCount: selectedCourses.length,
+      selectedCredits,
+      viewLabel: activeNav ? activeNav.label : '未识别页面',
+      pageUrl: window.location.href,
+      userAgent: window.navigator.userAgent,
+      capturedAt: new Date().toISOString(),
+    };
+  }
+
+  function updateFeedbackDraft(patch: Partial<FeedbackDraft>) {
+    setFeedbackDraft((current) => ({ ...current, ...patch }));
+  }
+
+  function resetFeedbackDraft() {
+    setFeedbackDraft({ ...EMPTY_FEEDBACK_DRAFT });
+    setLastFeedbackUrl('');
+    setFeedbackError('');
+    setFeedbackMessage('');
+  }
+
+  /** 校验并组装一条留言；不写存储也不开窗口，方便单独复用。 */
+  function prepareFeedbackEntry(): FeedbackEntry | null {
+    const error = validateFeedbackDraft(feedbackDraft);
+    if (error) {
+      setFeedbackError(error);
+      setFeedbackMessage('');
+      return null;
+    }
+    return createFeedbackEntry(feedbackDraft, {
+      context: feedbackDraft.attachContext ? currentFeedbackContext() : null,
+    });
+  }
+
+  /** 只保存到本机：不需要联网，离线版也能用。 */
+  function saveFeedbackLocally() {
+    const entry = prepareFeedbackEntry();
+    if (!entry) return;
+    setFeedbackEntries((current) => upsertFeedbackEntry(current, entry));
+    setFeedbackDraft({ ...EMPTY_FEEDBACK_DRAFT });
+    setFeedbackError('');
+    setFeedbackMessage(
+      `留言已保存在本机（${formatFeedbackTime(
+        entry.createdAt,
+      )}）。需要我处理时，请在右侧留言记录里点“打开 GitHub 提交页”。`,
+    );
+  }
+
+  /** 保存 + 打开预填好的 GitHub 新建 Issue 页面，并记一次提交尝试。 */
+  function submitFeedbackToGitHub() {
+    const entry = prepareFeedbackEntry();
+    if (!entry) return;
+    const url = buildIssueUrl(entry);
+    if (isIssueUrlTooLong(url)) {
+      setFeedbackError(
+        '留言内容较长，提交链接超出浏览器长度限制；请改用“复制留言内容”，粘贴到 GitHub Issue 里提交。',
+      );
+      setFeedbackMessage('');
+      return;
+    }
+    openFeedbackUrl(entry, url);
+    setFeedbackDraft({ ...EMPTY_FEEDBACK_DRAFT });
+  }
+
+  function openFeedbackUrl(entry: FeedbackEntry, url: string) {
+    // 注意：带 noopener 时 window.open 按规范返回 null，不能靠返回值判断是否被拦截，
+    // 所以两种情况下都给出“手动打开提交页”的兜底链接。
+    window.open(url, '_blank', 'noopener,noreferrer');
+    const submitted = markFeedbackSubmitted(entry, new Date());
+    setFeedbackEntries((current) =>
+      current.some((item) => item.id === entry.id)
+        ? current.map((item) => (item.id === entry.id ? submitted : item))
+        : upsertFeedbackEntry(current, submitted),
+    );
+    setLastFeedbackUrl(url);
+    setFeedbackError('');
+    setFeedbackMessage(
+      '已打开 GitHub 提交页：确认标题与正文后点“Create”即可提交；若没有自动打开，请点下面的“手动打开 GitHub 提交页”。',
+    );
+  }
+
+  /** 重新打开某条已保存留言的 GitHub 提交页。 */
+  function reopenFeedbackIssue(entry: FeedbackEntry) {
+    openFeedbackUrl(entry, buildIssueUrl(entry));
+  }
+
+  async function copyFeedbackText(
+    text: string,
+    successMessage: string,
+    entryId = '',
+  ) {
+    const clipboard = window.navigator.clipboard;
+    if (!clipboard || typeof clipboard.writeText !== 'function') {
+      setFeedbackError(
+        '当前环境不支持自动复制（离线打开网页时常见），请手动选中文字复制。',
+      );
+      setFeedbackMessage('');
+      return;
+    }
+    try {
+      await clipboard.writeText(text);
+      setCopiedFeedbackId(entryId);
+      setFeedbackError('');
+      setFeedbackMessage(successMessage);
+    } catch {
+      setFeedbackError('复制失败，请手动选中文字复制。');
+      setFeedbackMessage('');
+    }
+  }
+
+  function deleteFeedbackEntry(id: string) {
+    if (!window.confirm('删除本机保留的这条留言？删除后无法恢复。')) return;
+    setFeedbackEntries((current) => removeFeedbackEntry(current, id));
+    setFeedbackError('');
+    setFeedbackMessage('已删除本机保留的这条留言。');
+  }
+
+  function clearAllFeedback() {
+    if (!window.confirm('清空本机保留的全部留言？删除后无法恢复。')) return;
+    setFeedbackEntries([]);
+    setFeedbackError('');
+    setFeedbackMessage('已清空本机保留的留言。');
+  }
+
+  /** 导出本机留言为 Markdown 文件（离线用户交给维护者的主要途径）。 */
+  function exportFeedbackEntries() {
+    if (feedbackEntries.length === 0) {
+      setFeedbackError('本机还没有可导出的留言，先写一条或保存一条吧。');
+      setFeedbackMessage('');
+      return;
+    }
+    const now = new Date();
+    downloadText(
+      feedbackExportFileName(now),
+      formatFeedbackExport(feedbackEntries, now),
+      'text/markdown;charset=utf-8',
+    );
+    setFeedbackError('');
+    setFeedbackMessage(
+      `已导出 ${feedbackEntries.length} 条留言为 Markdown 文件，可直接粘贴到 GitHub Issue 或发给维护者。`,
+    );
+  }
 
   return (
     <main className="course-app">
@@ -3087,7 +3427,21 @@ export default function CourseExplorer({
                           <NativeSelect
                             aria-label="按开课院系筛选"
                             className="w-full [&>select]:h-11"
-                            onChange={(event) => setCollege(event.target.value)}
+                            onChange={(event) => {
+                              const nextCollege = event.target.value;
+                              setCollege(nextCollege);
+                              // 学科二级随学院一级联动：新学院不再包含当前学科时回退到
+                              // “全部学科/专业”，避免筛选框里留着一个已经不在列表里的值。
+                              const nextGroup = subjectGroups.find(
+                                (group) => group.label === nextCollege,
+                              );
+                              if (
+                                nextGroup &&
+                                !nextGroup.items.includes(subject)
+                              ) {
+                                setSubject('全部学科/专业');
+                              }
+                            }}
                             value={college}
                           >
                             <NativeSelectOption value="全部院系">
@@ -3100,7 +3454,7 @@ export default function CourseExplorer({
                             ))}
                           </NativeSelect>
                           <NativeSelect
-                            aria-label="按所属学科或专业筛选"
+                            aria-label="按所属学科或专业筛选（按学院分组）"
                             className="w-full [&>select]:h-11"
                             onChange={(event) => setSubject(event.target.value)}
                             value={subject}
@@ -3108,10 +3462,26 @@ export default function CourseExplorer({
                             <NativeSelectOption value="全部学科/专业">
                               全部学科/专业
                             </NativeSelectOption>
-                            {subjects.map((item) => (
-                              <NativeSelectOption key={item} value={item}>
-                                {item}
-                              </NativeSelectOption>
+                            {visibleSubjectGroups.map((group) => (
+                              <NativeSelectOptGroup
+                                key={group.id}
+                                label={group.label}
+                              >
+                                {group.items.length > 0 ? (
+                                  group.items.map((item) => (
+                                    <NativeSelectOption key={item} value={item}>
+                                      {item}
+                                    </NativeSelectOption>
+                                  ))
+                                ) : (
+                                  <NativeSelectOption
+                                    value={`empty-${group.id}`}
+                                    disabled
+                                  >
+                                    暂无已载入专业
+                                  </NativeSelectOption>
+                                )}
+                              </NativeSelectOptGroup>
                             ))}
                           </NativeSelect>
                           <NativeSelect
@@ -4617,6 +4987,312 @@ export default function CourseExplorer({
                     </span>
                   </div>
                 </section>
+              ) : view === 'feedback' ? (
+                <section className="py-6">
+                  <div className="section-heading mb-5">
+                    <p>FEEDBACK / MESSAGES</p>
+                    <h2>意见反馈 / 留言</h2>
+                    <div className="section-description">
+                      课程数据、培养方案口径或使用体验有问题，都可以在这里留言。留言先保存在本机浏览器，再由你确认后带到 GitHub Issue
+                      提交；本站是纯静态页面，没有服务器，不会自动上传任何内容。
+                    </div>
+                  </div>
+
+                  {feedbackError && (
+                    <div className="workspace-feedback is-error" role="alert">
+                      {feedbackError}
+                    </div>
+                  )}
+                  {feedbackMessage && (
+                    <div className="workspace-feedback" role="status">
+                      {feedbackMessage}
+                    </div>
+                  )}
+                  {lastFeedbackUrl && (
+                    <p className="feedback-fallback">
+                      提交页没有自动打开？
+                      <a
+                        href={lastFeedbackUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        手动打开 GitHub 提交页
+                        <ExternalLink aria-hidden="true" />
+                      </a>
+                    </p>
+                  )}
+
+                  <div className="feedback-layout">
+                    <article className="data-management-card feedback-compose">
+                      <div className="data-management-card-head">
+                        <MessageSquarePlus />
+                        <div>
+                          <h3>写留言</h3>
+                          <p>
+                            写清“哪门课 / 哪个页面 + 实际情况 + 期望结果”，定位会快很多。
+                          </p>
+                        </div>
+                      </div>
+
+                      <fieldset className="feedback-field">
+                        <legend>留言类型</legend>
+                        <RadioGroup
+                          className="feedback-category-group"
+                          value={feedbackDraft.category}
+                          onValueChange={(value) =>
+                            updateFeedbackDraft({ category: value })
+                          }
+                        >
+                          {FEEDBACK_CATEGORIES.map((category) => (
+                            <label
+                              className="feedback-category-option"
+                              key={category.id}
+                            >
+                              <RadioGroupItem value={category.id} />
+                              <span>
+                                {category.label}
+                                <small>{category.hint}</small>
+                              </span>
+                            </label>
+                          ))}
+                        </RadioGroup>
+                      </fieldset>
+
+                      <label className="feedback-field">
+                        <span>
+                          标题
+                          <em>可选，留空时自动取正文首行</em>
+                        </span>
+                        <Input
+                          maxLength={FEEDBACK_MAX_TITLE}
+                          onChange={(event) =>
+                            updateFeedbackDraft({ title: event.target.value })
+                          }
+                          placeholder="例如：光学工程培养方案的必修课列表少了一门"
+                          value={feedbackDraft.title}
+                        />
+                      </label>
+
+                      <label className="feedback-field">
+                        <span>
+                          留言内容
+                          <em>
+                            {feedbackDraft.detail.length} /{' '}
+                            {FEEDBACK_MAX_DETAIL}
+                          </em>
+                        </span>
+                        <Textarea
+                          className="feedback-detail-input"
+                          maxLength={FEEDBACK_MAX_DETAIL}
+                          onChange={(event) =>
+                            updateFeedbackDraft({ detail: event.target.value })
+                          }
+                          placeholder={
+                            '示例：\n《光电子材料与器件》周三 1-3 节显示在 13-312，但教务系统里是 13-110。\n（数据纠错请尽量附上课程编码与信息来源）'
+                          }
+                          rows={8}
+                          value={feedbackDraft.detail}
+                        />
+                      </label>
+
+                      <label className="feedback-field">
+                        <span>
+                          联系方式
+                          <em>可选，会公开显示在 Issue 里</em>
+                        </span>
+                        <Input
+                          maxLength={FEEDBACK_MAX_CONTACT}
+                          onChange={(event) =>
+                            updateFeedbackDraft({ contact: event.target.value })
+                          }
+                          placeholder="邮箱 / 微信 / GitHub 用户名，便于回复与追问"
+                          value={feedbackDraft.contact}
+                        />
+                      </label>
+
+                      <label className="feedback-context-toggle">
+                        <Checkbox
+                          checked={feedbackDraft.attachContext}
+                          onCheckedChange={(checked) =>
+                            updateFeedbackDraft({
+                              attachContext: checked === true,
+                            })
+                          }
+                        />
+                        <span>
+                          附带环境信息
+                          <small>
+                            当前学期、培养方向、已选课程数量与学分、所在页面、页面地址、浏览器标识与记录时间；不含姓名、学号等身份信息。
+                          </small>
+                        </span>
+                      </label>
+
+                      <div className="feedback-actions">
+                        <Button
+                          className="h-10 rounded-xl"
+                          disabled={!storageReady}
+                          onClick={submitFeedbackToGitHub}
+                        >
+                          <Send /> 提交到 GitHub Issue
+                        </Button>
+                        <Button
+                          className="h-10 rounded-xl"
+                          disabled={!storageReady}
+                          onClick={saveFeedbackLocally}
+                          variant="outline"
+                        >
+                          <ClipboardCheck /> 只保存到本机
+                        </Button>
+                        <Button
+                          className="h-10 rounded-xl"
+                          onClick={() => {
+                            const entry = prepareFeedbackEntry();
+                            if (entry)
+                              void copyFeedbackText(
+                                formatFeedbackEntryText(entry),
+                                '留言内容已复制到剪贴板，可直接粘贴到 Issue、邮件或聊天窗口。',
+                              );
+                          }}
+                          variant="outline"
+                        >
+                          <Copy /> 复制留言内容
+                        </Button>
+                        <Button
+                          className="h-10 rounded-xl"
+                          onClick={resetFeedbackDraft}
+                          variant="ghost"
+                        >
+                          <X /> 清空表单
+                        </Button>
+                      </div>
+
+                      <div className="source-compare-note mt-5">
+                        <ShieldCheck />
+                        <span>
+                          提交需要 GitHub
+                          账号：点“提交到 GitHub Issue”会打开预填好标题与正文的新建
+                          Issue
+                          页面，最后一步的“Create”由你自己确认。没有账号时可以“只保存到本机”，再导出
+                          Markdown 发给维护者；正文不会自动上传，也不要用它提交身份证号、学号、手机号等敏感信息。
+                        </span>
+                      </div>
+                    </article>
+
+                    <article className="data-management-card feedback-records">
+                      <div className="data-management-card-head">
+                        <ClipboardList />
+                        <div>
+                          <h3>本机留言记录</h3>
+                          <p>
+                            共 {feedbackEntries.length} / {FEEDBACK_MAX_ENTRIES}
+                            条，仅保存在当前浏览器。
+                          </p>
+                        </div>
+                      </div>
+
+                      {feedbackEntries.length === 0 ? (
+                        <div className="empty-state mt-5">
+                          <MessageSquarePlus />
+                          <h3>还没有本机留言</h3>
+                          <p>
+                            左侧写好内容后点“只保存到本机”，就能在这里留档、导出或稍后再提交。
+                          </p>
+                        </div>
+                      ) : (
+                        <ul className="feedback-entry-list">
+                          {feedbackEntries.map((entry) => (
+                            <li className="feedback-entry" key={entry.id}>
+                              <div className="feedback-entry-head">
+                                <Badge variant="secondary">
+                                  {getFeedbackCategory(entry.category).label}
+                                </Badge>
+                                <strong>{entry.title}</strong>
+                              </div>
+                              <p className="feedback-entry-meta">
+                                {formatFeedbackTime(entry.createdAt)} ·{' '}
+                                {formatFeedbackEntryStatus(entry)}
+                                {entry.context ? ' · 含环境信息' : ''}
+                              </p>
+                              <p className="feedback-entry-detail">
+                                {entry.detail}
+                              </p>
+                              {entry.contact && (
+                                <p className="feedback-entry-meta">
+                                  联系方式：{entry.contact}
+                                </p>
+                              )}
+                              <div className="feedback-entry-actions">
+                                <Button
+                                  className="h-9 rounded-lg"
+                                  onClick={() => reopenFeedbackIssue(entry)}
+                                  variant="outline"
+                                >
+                                  <ExternalLink /> 打开 GitHub 提交页
+                                </Button>
+                                <Button
+                                  className="h-9 rounded-lg"
+                                  onClick={() =>
+                                    void copyFeedbackText(
+                                      formatFeedbackEntryText(entry),
+                                      '这条留言已复制到剪贴板。',
+                                      entry.id,
+                                    )
+                                  }
+                                  variant="outline"
+                                >
+                                  {copiedFeedbackId === entry.id ? (
+                                    <>
+                                      <CheckCircle2 /> 已复制
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy /> 复制
+                                    </>
+                                  )}
+                                </Button>
+                                <Button
+                                  className="h-9 rounded-lg"
+                                  onClick={() => deleteFeedbackEntry(entry.id)}
+                                  variant="ghost"
+                                >
+                                  <Trash2 /> 删除
+                                </Button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      <div className="feedback-actions mt-4">
+                        <Button
+                          className="h-10 rounded-xl"
+                          disabled={feedbackEntries.length === 0}
+                          onClick={exportFeedbackEntries}
+                          variant="outline"
+                        >
+                          <Download /> 导出全部留言
+                        </Button>
+                        <Button
+                          className="h-10 rounded-xl"
+                          disabled={feedbackEntries.length === 0}
+                          onClick={clearAllFeedback}
+                          variant="ghost"
+                        >
+                          <Trash2 /> 清空本机留言
+                        </Button>
+                        <a
+                          className="feedback-issues-link"
+                          href={FEEDBACK_ISSUES_URL}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          查看已有反馈与处理进度
+                          <ExternalLink aria-hidden="true" />
+                        </a>
+                      </div>
+                    </article>
+                  </div>
+                </section>
               ) : null
               }
             </TabsContent>
@@ -4873,16 +5549,38 @@ export default function CourseExplorer({
           <label className="settings-field">
             培养方向
             <NativeSelect
-              aria-label="设置培养方向"
+              aria-label="设置培养方向（按学院分组）"
               value={programPlanId}
               onChange={(event) => setProgramPlanId(event.target.value)}
             >
-              {availableProgramPlans.map((plan) => (
-                <NativeSelectOption key={plan.id} value={plan.id}>
-                  {plan.label}
-                </NativeSelectOption>
+              {programPlanGroups.map((group) => (
+                <NativeSelectOptGroup
+                  key={group.id}
+                  label={
+                    group.plans.length > 0
+                      ? `${group.label}（${group.plans.length} 个培养方向）`
+                      : group.label
+                  }
+                >
+                  {group.plans.length > 0 ? (
+                    group.plans.map((plan) => (
+                      <NativeSelectOption key={plan.id} value={plan.id}>
+                        {plan.label}
+                      </NativeSelectOption>
+                    ))
+                  ) : (
+                    <NativeSelectOption value={`empty-${group.id}`} disabled>
+                      暂无已导入培养方案
+                    </NativeSelectOption>
+                  )}
+                </NativeSelectOptGroup>
               ))}
             </NativeSelect>
+            <small className="settings-explanation font-normal">
+              {activeProgramCollege === FALLBACK_PROGRAM_PLAN_COLLEGE
+                ? '当前培养方向未标注所属学院，按“其他培养方案”归类，不影响学分与选课规则。'
+                : `当前所属学院：${activeProgramCollege}`}
+            </small>
           </label>
           {isDoctorPlan && (
             <fieldset className="settings-qualification">
