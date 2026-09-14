@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import ErrorBoundary from '@/components/error-boundary';
 import OfflineRegistration from './offline-registration';
 
 export const metadata: Metadata = {
-  title: 'DeepSeek Harness Desktop',
+  title: 'HIAS-CSA · 2026 秋季预选课助手',
   description:
     '仅面向国科大杭州高等研究院 2026 级研一新生的秋季预选课辅助工具，支持课程筛选、选课方案体检、学位课属性、培养方案核对、课表模拟与冲突检测。',
   manifest: '/manifest.webmanifest',
@@ -37,7 +38,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body>
-        {children}
+        <ErrorBoundary>{children}</ErrorBoundary>
         <OfflineRegistration />
       </body>
     </html>

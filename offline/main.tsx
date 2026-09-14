@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import CourseExplorer from '@/app/course-explorer';
 import OfflineRegistration from '@/app/offline-registration';
 import courses from '@/app/courses.json';
+import ErrorBoundary from '@/components/error-boundary';
 import '@/app/globals.css';
 
 const root = document.getElementById('root');
@@ -12,8 +13,8 @@ if (!root) {
 }
 
 createRoot(root).render(
-  <>
+  <ErrorBoundary>
     <CourseExplorer initialCourses={courses} />
     <OfflineRegistration />
-  </>,
+  </ErrorBoundary>,
 );

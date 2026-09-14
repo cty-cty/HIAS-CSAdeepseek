@@ -269,6 +269,33 @@ const ACTIVE_PROGRAM_STORAGE_KEY = 'hias-active-program-v1';
 const INITIAL_SETTINGS_STORAGE_KEY = 'hias-initial-settings-completed-v1';
 const DOCTOR_TRACK_STORAGE_KEY = 'hias-doctor-track-v1';
 const LEGACY_SELECTED_STORAGE_KEY = 'ucas-hangzhou-selected';
+// 导入数据校验不通过时把原始字符串另存一份，避免被后续持久化覆盖后无法恢复。
+const COURSE_DATASETS_BACKUP_STORAGE_KEY = 'hias-course-datasets-backup-v1';
+
+/**
+ * localStorage 写入保护。
+ * 配额超限（QuotaExceededError）或浏览器禁用存储时，写入会抛异常；
+ * 若异常发生在 effect 中，React 会卸载整棵树导致白屏，因此统一在此兜底。
+ */
+function safeSetItem(key: string, value: string): boolean {
+  try {
+    window.localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 同上，但负责序列化；序列化本身也可能抛异常（循环引用等）。 */
+function safeSetJSON(key: string, value: unknown): boolean {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const BACKUP_VERSION = 2;
 const EMPTY_SELECTED_IDS: string[] = [];
 const EMPTY_DESIGNATIONS: Record<string, CourseDesignation> = {};
@@ -305,6 +332,14 @@ type ConflictPair = {
   left: Course;
   right: Course;
   slots: ConflictSlot[];
+};
+
+// 移动端竖版卡片课表用：一门课程在某一天的一个上课安排。
+type WeekScheduleCard = {
+  course: Course;
+  schedule: Schedule;
+  tone: string[];
+  conflict: boolean;
 };
 
 type ExamBucketId = 'closed' | 'open' | 'report' | 'practical' | 'other';
@@ -944,6 +979,7 @@ export default function CourseExplorer({
   const [category, setCategory] = useState('全部类别');
   const [day, setDay] = useState('全部星期');
   const [storageReady, setStorageReady] = useState(false);
+  const [persistError, setPersistError] = useState('');
   const [dataMessage, setDataMessage] = useState('');
   const [dataError, setDataError] = useState('');
   const [onlySelected, setOnlySelected] = useState(false);
@@ -1110,6 +1146,12 @@ export default function CourseExplorer({
     return groups;
   }, [availableProgramPlans]);
 
+  const reportPersistFailure = useCallback(() => {
+    setPersistError(
+      '浏览器本地存储写入失败（可能空间已满或已被禁用），刚才的改动可能没有保存。建议先在“数据管理”中导出备份，并清理不再需要的学期数据。',
+    );
+  }, []);
+
   useEffect(() => {
     selectedIdsRef.current = selectedIds;
   }, [selectedIds]);
@@ -1142,26 +1184,47 @@ export default function CourseExplorer({
     const storedFeedback = window.localStorage.getItem(FEEDBACK_STORAGE_KEY);
 
     let parsedDatasets: CourseDataset[] = [];
+    let datasetWarning = '';
     if (storedDatasets) {
       try {
-        const parsed = JSON.parse(storedDatasets);
-        if (
-          Array.isArray(parsed) &&
-          parsed.every(
-            (dataset) =>
-              dataset &&
-              typeof dataset.id === 'string' &&
-              typeof dataset.label === 'string' &&
-              Array.isArray(dataset.courses) &&
-              dataset.courses.every(isCourse) &&
-              (dataset.audience === undefined ||
-                typeof dataset.audience === 'string'),
-          )
-        ) {
-          parsedDatasets = parsed;
+        const parsed: unknown = JSON.parse(storedDatasets);
+        if (Array.isArray(parsed)) {
+          const kept: CourseDataset[] = [];
+          let droppedDatasets = 0;
+          let droppedCourses = 0;
+          parsed.forEach((entry) => {
+            const dataset = entry as Partial<CourseDataset> | null;
+            if (
+              !dataset ||
+              typeof dataset.id !== 'string' ||
+              typeof dataset.label !== 'string' ||
+              !Array.isArray(dataset.courses) ||
+              (dataset.audience !== undefined &&
+                typeof dataset.audience !== 'string')
+            ) {
+              droppedDatasets += 1;
+              return;
+            }
+            const courses = dataset.courses.filter(isCourse);
+            droppedCourses += dataset.courses.length - courses.length;
+            kept.push({ ...(dataset as CourseDataset), courses });
+          });
+          parsedDatasets = kept;
+          if (droppedDatasets || droppedCourses) {
+            safeSetItem(COURSE_DATASETS_BACKUP_STORAGE_KEY, storedDatasets);
+            datasetWarning =
+              `已导入的课程数据中有 ${droppedDatasets} 个学期、${droppedCourses} 门课程与当前版本不兼容，已跳过；` +
+              '原始内容已完整备份在本浏览器中（不会被自动删除），可重新导入原文件恢复。';
+          }
+        } else {
+          safeSetItem(COURSE_DATASETS_BACKUP_STORAGE_KEY, storedDatasets);
+          datasetWarning =
+            '已导入的课程数据格式无法识别，已跳过；原始内容已完整备份在本浏览器中，可重新导入原文件恢复。';
         }
       } catch {
-        window.localStorage.removeItem(COURSE_DATASETS_STORAGE_KEY);
+        safeSetItem(COURSE_DATASETS_BACKUP_STORAGE_KEY, storedDatasets);
+        datasetWarning =
+          '已导入的课程数据无法解析，已跳过；原始内容已完整备份在本浏览器中，可重新导入原文件恢复。';
       }
     }
 
@@ -1326,6 +1389,7 @@ export default function CourseExplorer({
     setHistoricalRecords(parsedHistoricalRecords);
     setEnglishExemptionStatus(parsedExemption);
     setFeedbackEntries(parseFeedbackEntries(storedFeedback));
+    if (datasetWarning) setDataError(datasetWarning);
     setStorageReady(true);
     const needsInitialSetup =
       window.localStorage.getItem(INITIAL_SETTINGS_STORAGE_KEY) !== '1';
@@ -1335,56 +1399,59 @@ export default function CourseExplorer({
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      COURSE_DATASETS_STORAGE_KEY,
-      JSON.stringify(customDatasets),
-    );
-    window.localStorage.setItem(ACTIVE_TERM_STORAGE_KEY, activeTermId);
-  }, [activeTermId, customDatasets, storageReady]);
+    const datOk = safeSetJSON(COURSE_DATASETS_STORAGE_KEY, customDatasets);
+    const termOk = safeSetItem(ACTIVE_TERM_STORAGE_KEY, activeTermId);
+    if (!datOk || !termOk) reportPersistFailure();
+  }, [activeTermId, customDatasets, reportPersistFailure, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      SELECTED_BY_TERM_STORAGE_KEY,
-      JSON.stringify(selectedByTerm),
-    );
-  }, [selectedByTerm, storageReady]);
+    if (!safeSetJSON(SELECTED_BY_TERM_STORAGE_KEY, selectedByTerm)) {
+      reportPersistFailure();
+    }
+  }, [reportPersistFailure, selectedByTerm, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      DESIGNATIONS_BY_TERM_STORAGE_KEY,
-      JSON.stringify(designationsByTerm),
-    );
-  }, [designationsByTerm, storageReady]);
+    if (!safeSetJSON(DESIGNATIONS_BY_TERM_STORAGE_KEY, designationsByTerm)) {
+      reportPersistFailure();
+    }
+  }, [designationsByTerm, reportPersistFailure, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      PROGRAM_PLANS_STORAGE_KEY,
-      JSON.stringify(customProgramPlans),
-    );
-  }, [customProgramPlans, storageReady]);
+    if (!safeSetJSON(PROGRAM_PLANS_STORAGE_KEY, customProgramPlans)) {
+      reportPersistFailure();
+    }
+  }, [customProgramPlans, reportPersistFailure, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
+    const historyOk = safeSetJSON(
       HISTORICAL_RECORDS_STORAGE_KEY,
-      JSON.stringify(historicalRecords),
+      historicalRecords,
     );
-    window.localStorage.setItem(
+    const exemptionOk = safeSetItem(
       ENGLISH_EXEMPTION_STORAGE_KEY,
       englishExemptionStatus,
     );
-  }, [englishExemptionStatus, historicalRecords, storageReady]);
+    if (!historyOk || !exemptionOk) reportPersistFailure();
+  }, [
+    englishExemptionStatus,
+    historicalRecords,
+    reportPersistFailure,
+    storageReady,
+  ]);
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(
-      FEEDBACK_STORAGE_KEY,
-      serializeFeedbackEntries(feedbackEntries),
-    );
-  }, [feedbackEntries, storageReady]);
+    // 与其余持久化一致走 safeSetItem：配额超限或存储被禁用时不抛异常、不白屏，
+    // 只上报一次持久化失败；序列化仍保留“排序 + 截断到上限”。
+    const saved = serializeFeedbackEntries(feedbackEntries);
+    if (!safeSetItem(FEEDBACK_STORAGE_KEY, saved)) {
+      reportPersistFailure();
+    }
+  }, [feedbackEntries, reportPersistFailure, storageReady]);
 
   // 复制成功提示 2 秒后自动消失（保留列表里的留言本身）。
   useEffect(() => {
@@ -2211,6 +2278,27 @@ export default function CourseExplorer({
     });
     return result;
   }, [selectedCourses, week]);
+
+  // 移动端竖版卡片课表：只取“第 week 周有课”的安排，按星期分组并按时段排序。
+  const weekSchedulesByDay = useMemo(() => {
+    const grouped: WeekScheduleCard[][] = DAYS.map(() => []);
+    selectedCourses.forEach((course) => {
+      const tone = courseColor(course.id);
+      const conflict = currentWeekConflicts.has(course.id);
+      course.schedules.forEach((schedule) => {
+        if (!schedule.weeks.includes(week)) return;
+        grouped[schedule.dayIndex]?.push({ course, schedule, tone, conflict });
+      });
+    });
+    grouped.forEach((cards) =>
+      cards.sort(
+        (left, right) =>
+          left.schedule.start - right.schedule.start ||
+          left.schedule.end - right.schedule.end,
+      ),
+    );
+    return grouped;
+  }, [currentWeekConflicts, selectedCourses, week]);
 
   const filteredCourses = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -3251,12 +3339,15 @@ export default function CourseExplorer({
               ))}
             </TabsList>
           </div>
-          {(dataMessage || dataError) && view !== 'data' && (
+          {(dataMessage || dataError || persistError) && view !== 'data' && (
             <div
-              className={'workspace-feedback ' + (dataError ? 'is-error' : '')}
-              role={dataError ? 'alert' : 'status'}
+              className={
+                'workspace-feedback ' +
+                (dataError || persistError ? 'is-error' : '')
+              }
+              role={dataError || persistError ? 'alert' : 'status'}
             >
-              {dataError || dataMessage}
+              {persistError || dataError || dataMessage}
             </div>
           )}
           {conflictPairs.length > 0 && (
@@ -3377,7 +3468,11 @@ export default function CourseExplorer({
                             : '按课程、教师或上课时间查找，加入你的模拟课表。'}
                       </div>
                     </div>
-                    <p className="text-sm text-slate-500">
+                    <p
+                      aria-live="polite"
+                      className="text-sm text-slate-500"
+                      role="status"
+                    >
                       已显示 {Math.min(visibleCount, filteredCourses.length)} /{' '}
                       {filteredCourses.length}
                     </p>
@@ -3811,18 +3906,22 @@ export default function CourseExplorer({
                   {(dataManagementMessage ||
                     dataManagementError ||
                     dataMessage ||
-                    dataError) && (
+                    dataError ||
+                    persistError) && (
                     <div
                       className={`mb-4 rounded-xl border px-3 py-2.5 text-sm leading-6 ${
-                        dataManagementError || dataError
+                        dataManagementError || dataError || persistError
                           ? 'border-rose-200 bg-rose-50 text-rose-700'
                           : 'border-emerald-200 bg-emerald-50 text-emerald-700'
                       }`}
                       role={
-                        dataManagementError || dataError ? 'alert' : 'status'
+                        dataManagementError || dataError || persistError
+                          ? 'alert'
+                          : 'status'
                       }
                     >
-                      {dataManagementError ||
+                      {persistError ||
+                        dataManagementError ||
                         dataError ||
                         dataManagementMessage ||
                         dataMessage}
@@ -4485,7 +4584,7 @@ export default function CourseExplorer({
                                 {issue.action && (
                                   <p
                                     className={
-                                      'mt-1 text-[11px] leading-4 ' +
+                                      'mt-1 text-[12px] leading-4 ' +
                                       (isPending
                                         ? 'text-slate-500'
                                         : 'text-amber-700')
@@ -4575,7 +4674,7 @@ export default function CourseExplorer({
                           {item.meta && (
                             <em
                               className={
-                                'text-[11px] font-semibold not-italic leading-4 ' +
+                                'text-[12px] font-semibold not-italic leading-4 ' +
                                 ((item as { metaTone?: 'ok' | 'amber' })
                                   .metaTone === 'ok'
                                   ? 'text-emerald-700'
@@ -5515,7 +5614,7 @@ export default function CourseExplorer({
       </div>
       {selectionMessage && (
         <div className="selection-toast" key={selectionMessage}>
-          <output>{selectionMessage}</output>
+          <output aria-live="polite">{selectionMessage}</output>
           {undoSelection && undoSelection.termId === activeTermId && (
             <button type="button" onClick={undoLastSelection}>
               <Undo2 />
@@ -5848,7 +5947,7 @@ export default function CourseExplorer({
                           ))}
                         </div>
                         {plan.notes.length > 0 && (
-                          <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-4 text-amber-800">
+                          <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[12px] leading-4 text-amber-800">
                             {plan.notes.join(' ')}
                           </p>
                         )}
@@ -5911,7 +6010,7 @@ export default function CourseExplorer({
                         </div>
                       ))}
                   </div>
-                  <p className="mt-2 text-[11px] leading-4 text-slate-400">
+                  <p className="mt-2 text-[12px] leading-4 text-slate-400">
                     候选已按培养缺口、时间冲突、重复班次与名额过滤；仅列出部分供参考。
                   </p>
                 </div>
@@ -5947,7 +6046,7 @@ export default function CourseExplorer({
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs leading-5 text-slate-500">
-              桌面端横向滚动可查看完整一周；点击课程块可查看课程详情。
+              点击课程块可查看课程详情；窄屏设备会自动切换为按星期分组的卡片视图，桌面端可横向滚动查看完整一周。
             </p>
             <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
               查看周次
@@ -5978,7 +6077,7 @@ export default function CourseExplorer({
                   门课程时间重叠，已用红色标出。
                 </div>
               )}
-              <div className="w-full min-w-0 overflow-x-auto pb-2">
+              <div className="timetable-grid-wrap hidden w-full min-w-0 overflow-x-auto pb-2 md:block">
                 <div className="timetable-grid">
                   <div className="timetable-corner">节次</div>
                   {DAYS.map((label, index) => (
@@ -6053,6 +6152,110 @@ export default function CourseExplorer({
                       }),
                   )}
                 </div>
+              </div>
+              <div className="timetable-cards md:hidden">
+                {weekSchedulesByDay.some((cards) => cards.length > 0) ? (
+                  <div className="flex flex-col gap-4">
+                    {DAYS.map((dayLabel, dayIndex) => {
+                      const cards = weekSchedulesByDay[dayIndex] ?? [];
+                      if (cards.length === 0) return null;
+                      return (
+                        <section key={dayLabel} aria-label={`${dayLabel}的课程`}>
+                          <div className="mb-2 flex items-center gap-2">
+                            <span className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-bold text-white">
+                              {dayLabel}
+                            </span>
+                            <span className="text-xs text-slate-400">
+                              {cards.length} 个时段
+                            </span>
+                            {cards.some((card) => card.conflict) && (
+                              <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[0.75rem] font-semibold text-rose-600">
+                                <Zap className="size-3" aria-hidden="true" />
+                                有冲突
+                              </span>
+                            )}
+                          </div>
+                          <ul className="flex flex-col gap-2">
+                            {cards.map(
+                              (
+                                { course, schedule, tone, conflict },
+                                cardIndex,
+                              ) => (
+                                <li
+                                  key={`${course.id}-${dayIndex}-${schedule.start}-${schedule.end}-${cardIndex}`}
+                                >
+                                  <button
+                                    aria-label={`${course.name} ${
+                                      schedule.start === schedule.end
+                                        ? `第${schedule.start}节`
+                                        : `第${schedule.start}-${schedule.end}节`
+                                    } ${schedule.room || ''} ${schedule.weeksText}`}
+                                    className={`flex w-full items-stretch gap-3 rounded-2xl border p-3 text-left shadow-sm transition active:scale-[0.99] ${
+                                      conflict
+                                        ? 'border-rose-200'
+                                        : 'border-slate-200/80'
+                                    }`}
+                                    onClick={() => setDetailCourse(course)}
+                                    type="button"
+                                  >
+                                    <span
+                                      className="flex w-14 shrink-0 flex-col items-center justify-center rounded-xl px-1 py-1.5 text-center text-white"
+                                      style={{
+                                        backgroundColor: conflict
+                                          ? '#e11d48'
+                                          : tone[1],
+                                      }}
+                                    >
+                                      <span className="text-[0.8rem] font-bold leading-tight">
+                                        {schedule.start === schedule.end
+                                          ? schedule.start
+                                          : `${schedule.start}-${schedule.end}`}
+                                      </span>
+                                      <span className="text-[0.75rem] opacity-80">
+                                        节
+                                      </span>
+                                    </span>
+                                    <span className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+                                      <strong className="text-[0.9rem] leading-5 text-slate-800">
+                                        {course.name}
+                                      </strong>
+                                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.75rem] leading-4 text-slate-500">
+                                        <span className="inline-flex items-center gap-1">
+                                          <MapPin
+                                            className="size-3"
+                                            aria-hidden="true"
+                                          />
+                                          {schedule.room || '教室待定'}
+                                        </span>
+                                        <span className="inline-flex items-center gap-1">
+                                          <Repeat2
+                                            className="size-3"
+                                            aria-hidden="true"
+                                          />
+                                          {schedule.weeksText}
+                                        </span>
+                                      </span>
+                                    </span>
+                                  </button>
+                                </li>
+                              ),
+                            )}
+                          </ul>
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+                    <CalendarDays className="size-6 text-slate-300" />
+                    <p className="text-sm font-medium text-slate-500">
+                      第 {week} 周没有已选课程上课
+                    </p>
+                    <p className="text-xs leading-5 text-slate-400">
+                      试试在上方「查看周次」切换到其他周，或回课程列表添加课程。
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

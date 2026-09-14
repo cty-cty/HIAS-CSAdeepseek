@@ -48,6 +48,9 @@
 }
 
 :root {
+  /* 应用只提供浅色主题：显式声明，避免系统开启深色模式时
+     原生控件（复选框、下拉框、滚动条）被渲染成深色而与本页冲突。 */
+  color-scheme: light;
   --background: #f4f6fa;
   --foreground: oklch(0.24 0.04 255);
   --card: oklch(1 0 0);
@@ -207,7 +210,7 @@ button {
 
 .plan-summary p {
   color: #87a098;
-  font-size: 0.73rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.15em;
 }
@@ -251,7 +254,7 @@ button {
   background: #f4faf7;
   padding: 0.28rem 0.52rem;
   color: #547269;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -335,7 +338,7 @@ button {
   background: #f7fbf9;
   padding: 0.28rem 0.55rem;
   color: #607487;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 650;
   cursor: pointer;
   transition:
@@ -437,7 +440,7 @@ button {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.72);
   padding: 0.36rem 0.58rem;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -459,7 +462,7 @@ button {
 }
 
 .english-requirement-callout span {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -470,7 +473,7 @@ button {
 .english-requirement-callout small {
   max-width: 54rem;
   color: currentColor;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   opacity: 0.82;
 }
@@ -535,7 +538,7 @@ button {
 .section-heading > div > p,
 .section-heading > p:first-child {
   color: #788782;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.13em;
 }
@@ -590,7 +593,7 @@ button {
 
 .conflict-panel-title span {
   color: #9f5a68;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .conflict-list {
@@ -636,7 +639,7 @@ button {
   background: #ffe4e6;
   padding: 0.18rem 0.45rem;
   color: #be123c;
-  font-size: 0.66rem;
+  font-size: 0.75rem;
 }
 
 .conflict-slots {
@@ -653,7 +656,7 @@ button {
   background: #fff1f2;
   padding: 0.3rem 0.48rem;
   color: #9f4356;
-  font-size: 0.69rem;
+  font-size: 0.75rem;
 }
 
 .conflict-slots svg {
@@ -688,7 +691,7 @@ button {
 .alternative-group > span,
 .conflict-no-alternative {
   color: #9f6a75;
-  font-size: 0.67rem;
+  font-size: 0.75rem;
 }
 
 .alternative-group > div {
@@ -707,7 +710,7 @@ button {
   background: white;
   padding: 0.45rem 0.6rem;
   color: #9f1239;
-  font-size: 0.69rem;
+  font-size: 0.75rem;
   font-weight: 700;
   transition: 150ms ease;
 }
@@ -817,7 +820,7 @@ button {
   overflow: hidden;
   margin-top: 0.1rem;
   color: #94a3b8;
-  font-size: 0.73rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -838,7 +841,7 @@ button {
   background: #fbfcfa;
   padding: 0.35rem 0.55rem;
   color: #63736d;
-  font-size: 0.73rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -932,7 +935,7 @@ button {
   background: #dff0e9;
   padding: 0.3rem 0.58rem;
   color: #397367;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -974,7 +977,7 @@ button {
 .program-selected-total span {
   margin-top: 0.35rem;
   color: #758981;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -997,7 +1000,7 @@ button {
 
 .requirement-item span {
   color: #8a9893;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
 }
 
 .requirement-item strong {
@@ -1036,7 +1039,7 @@ button {
 
 .rule-card div > span {
   color: #8b9a95;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .rule-card div > strong {
@@ -1048,7 +1051,7 @@ button {
 .rule-card p {
   margin-top: 0.2rem;
   color: #82918c;
-  font-size: 0.73rem;
+  font-size: 0.75rem;
 }
 
 .rule-card > b {
@@ -1295,7 +1298,7 @@ button {
 
 .designation-panel-head p {
   color: #80908a;
-  font-size: 0.69rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
@@ -1351,7 +1354,7 @@ button {
 .designation-row > button span {
   margin-top: 0.2rem;
   color: #84918d;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
 }
 
 .designation-control {
@@ -1364,7 +1367,7 @@ button {
 
 .designation-control small {
   color: #a56834;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   line-height: 1.4;
   text-align: right;
 }
@@ -1529,7 +1532,7 @@ button {
 
 .exam-summary > div:nth-child(2) span {
   color: #758982;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
 }
 
 .exam-summary > div:nth-child(2) strong {
@@ -1554,7 +1557,7 @@ button {
 .exam-summary-total span {
   margin-top: 0.25rem;
   color: #83928d;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .exam-grid {
@@ -1601,7 +1604,7 @@ button {
 
 .exam-card-head span {
   color: #7e8d88;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
 }
 
 .exam-card-head strong {
@@ -1614,13 +1617,13 @@ button {
   background: #f4f7f5;
   padding: 0.28rem 0.5rem;
   color: #62756f;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .exam-card > p {
   margin-top: 0.55rem;
   color: #8a9893;
-  font-size: 0.73rem;
+  font-size: 0.75rem;
 }
 
 .exam-course-list {
@@ -1683,7 +1686,7 @@ button {
 .program-course-group-title p,
 .program-course-footnote {
   color: #8b9994;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .hero-summary-grid {
@@ -1848,7 +1851,7 @@ button {
   border-top: 1px dashed #e3ebe7;
   padding-top: 0.45rem;
   color: #60736c;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
 }
 
 .history-record-list b {
@@ -1904,7 +1907,7 @@ button {
 
 .recommendation-dialog-combination span {
   color: #74867f;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   line-height: 1.55;
 }
 
@@ -2078,7 +2081,7 @@ button {
   max-width: 100%;
   margin-top: 0.22rem;
   color: #8d9b96;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2135,7 +2138,7 @@ button {
   grid-row: 1;
   place-items: center;
   color: #94a3b8;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .timetable-day {
@@ -2160,7 +2163,7 @@ button {
 }
 
 .timetable-period span {
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .timetable-course {
@@ -2196,7 +2199,7 @@ button {
 .timetable-course span {
   overflow: hidden;
   max-width: 100%;
-  font-size: 0.69rem;
+  font-size: 0.75rem;
   opacity: 0.78;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2219,7 +2222,7 @@ button {
   display: block;
   margin-bottom: 0.25rem;
   color: #94a3b8;
-  font-size: 0.73rem;
+  font-size: 0.75rem;
 }
 
 .detail-field strong {
@@ -2252,7 +2255,7 @@ button {
 .schedule-detail span {
   margin-top: 0.12rem;
   color: #94a3b8;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 @media (max-width: 640px) {
@@ -2283,7 +2286,7 @@ button {
 
   .hero-panel .hero-meta span {
     padding: 0.36rem 0.55rem;
-    font-size: 0.73rem;
+    font-size: 0.75rem;
   }
 
   .brand-lockup {
@@ -2478,6 +2481,12 @@ button {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+  /* 提示条的出场动画靠 2.74s 延迟触发，全局压缩时长会把它提前打到 opacity:0，
+     反而让开启“减少动态效果”的用户提前丢掉提示上的“撤销”按钮。
+     这里直接取消动画，保持居中可见，交给 JS 的 3s 定时移除。 */
+  .selection-toast {
+    animation: none !important;
   }
 }
 
@@ -2768,7 +2777,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  min-height: 2.4rem;
+  min-height: 2.75rem;
   max-width: 100%;
   padding: 0.35rem 0.6rem;
   background: #eff3f9;
@@ -3298,7 +3307,7 @@ button {
   gap: 0.3rem;
   flex-shrink: 0;
   min-height: 2.75rem;
-  min-width: 2.2rem;
+  min-width: 2.75rem;
   color: #deebff;
 }
 .selection-toast svg {
@@ -3403,7 +3412,11 @@ button {
 .course-app button:focus-visible,
 .course-app a:focus-visible,
 .course-app input:focus-visible,
-.course-app select:focus-visible {
+.course-app select:focus-visible,
+.course-app textarea:focus-visible,
+.course-app summary:focus-visible,
+.course-app [tabindex]:focus-visible,
+.course-app [role='button']:focus-visible {
   outline: 2px solid #406fbc;
   outline-offset: 3px;
 }
@@ -3588,20 +3601,93 @@ button {
     flex: 0 0 auto;
   }
 }
+@page {
+  margin: 12mm;
+}
+
 @media print {
+  /* ---------- 打印 / 导出 PDF ----------
+     目标是让课表和培养要求在 A4 上可读：去掉交互外壳、不让分页切断卡片、
+     960px 的横向课表改用竖版清单（网格在 A4 上放不下）。 */
+
+  /* 交互外壳一律不打印 */
   .workspace-nav,
   .selection-sidebar,
   .mobile-selection-bar,
   .selection-toast,
-  .catalog-filters {
+  .catalog-filters,
+  .active-filters,
+  .back-to-top,
+  .skip-link,
+  .workspace-feedback,
+  .empty-state button,
+  [data-slot='dialog-overlay'],
+  [data-slot='dialog-close'] {
     display: none !important;
   }
-  .workspace-layout.with-selection {
-    display: block;
+
+  html,
+  body {
+    background: #fff !important;
   }
+
+  .course-app {
+    min-height: 0;
+    color: #000;
+  }
+
   .app-shell {
     width: 100%;
     padding: 0;
+  }
+
+  .workspace-layout.with-selection {
+    display: block;
+  }
+
+  .course-app * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  /* 打开的弹窗（课表）在纸上不再是浮层 */
+  [data-slot='dialog-content'] {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    transform: none !important;
+    overflow: visible !important;
+    border: 1px solid #cbd5e1;
+    background: #fff !important;
+  }
+
+  /* 不要把卡片、课程行或课表分组从中间断开 */
+  article,
+  section,
+  li,
+  tr,
+  .catalog-grid > *,
+  .data-management-card,
+  .timetable-cards section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 横向网格课表在 A4 上放不下，改印按星期分组的竖版清单 */
+  .timetable-grid-wrap {
+    display: none !important;
+  }
+
+  .timetable-cards {
+    display: block !important;
+  }
+
+  /* 打印时保留课表卡片的底色区分（否则冲突色/课程色全部丢失） */
+  .timetable-cards * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 .header-selection {

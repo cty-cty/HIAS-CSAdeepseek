@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.18.0"
   },
   "scripts": {
     "dev": "vinext dev",
@@ -12,7 +12,8 @@
     "desktop:pack": "npm run build && electron-builder --win --dir",
     "desktop:dist": "npm run build && electron-builder --win nsis",
     "build": "node scripts/build-site.mjs",
-    "build:offline": "vite build --config vite.offline.config.ts && node scripts/package-offline.mjs && node scripts/validate-offline.mjs",
+    "build:offline": "vite build --config vite.offline.config.ts --configLoader native && node scripts/package-offline.mjs && node scripts/validate-offline.mjs",
+    "build:pages": "npm run build:offline && node scripts/prepare-pages.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "test:rules": "node --experimental-loader ./scripts/ts-extension-loader.mjs tests/program-rules.test.ts && node --experimental-loader ./scripts/ts-extension-loader.mjs tests/course-data.test.ts && node --experimental-loader ./scripts/ts-extension-loader.mjs tests/regression.test.ts && node --experimental-loader ./scripts/ts-extension-loader.mjs tests/feedback.test.ts && node --experimental-loader ./scripts/ts-extension-loader.mjs tests/css-guard.test.ts",

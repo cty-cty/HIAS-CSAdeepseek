@@ -37,6 +37,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/_site/
 /.openai/hosting.json
 tsconfig.tsbuildinfo
 tsconfig.tsbuildinfo.*
