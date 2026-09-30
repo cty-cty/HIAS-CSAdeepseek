@@ -42,6 +42,10 @@ import {
   type FeedbackDraft,
   type FeedbackEntry,
 } from '../app/feedback';
+import {
+  persistFeedbackEntries,
+  runFeedbackAction,
+} from '../app/feedback-actions';
 
 let passed = 0;
 let failed = 0;
@@ -273,7 +277,7 @@ eq(
 eq(formatFeedbackEntryStatus(entry), '尚未提交', 'F6c 未提交条目的状态文案');
 eq(
   formatFeedbackEntryStatus(markFeedbackSubmitted(entry, FIXED_NOW)).includes(
-    '已打开提交页 1 次',
+    '已尝试打开提交页 1 次',
   ),
   true,
   'F6d 提交后状态文案带次数',
@@ -399,6 +403,129 @@ eq(
   7,
   'F8l 环境信息共 7 行（含浏览器标识）',
 );
+
+// ---------- 9) 持久化与外部打开的事务边界 ----------
+const actionEvents: string[] = [];
+let stored = '';
+const write = (value: string) => {
+  actionEvents.push('persist');
+  stored = value;
+  return true;
+};
+const openIssue = (url: string) => {
+  actionEvents.push('open');
+  eq(
+    parseFeedbackEntries(stored)[0].detail,
+    entry.detail,
+    'F9 打开 GitHub 前正文已落盘',
+  );
+  eq(
+    new URL(url).searchParams.get('body'),
+    buildIssueBody(entry),
+    'F9b 打开链接携带完整正文',
+  );
+};
+const opened = runFeedbackAction([], entry, { write, openIssue }, FIXED_NOW);
+ok(opened.ok, 'F9c 留档成功后允许打开');
+eq(actionEvents, ['persist', 'open'], 'F9d 必须先写入再打开');
+eq(parseFeedbackEntries(stored)[0].submittedCount, 1, 'F9e 打开尝试计数已落盘');
+
+let forbiddenOpens = 0;
+const original = serializeFeedbackEntries([entry]);
+const failedSave = runFeedbackAction([entry], noContextEntry, {
+  write: () => false,
+  openIssue: () => {
+    forbiddenOpens += 1;
+  },
+});
+eq(failedSave, { ok: false, reason: 'storage' }, 'F9f 写入失败不返回保存成功');
+eq(forbiddenOpens, 0, 'F9g 写入失败绝不打开外部页面');
+eq(
+  serializeFeedbackEntries([entry]),
+  original,
+  'F9h 失败不修改原留言及提交计数',
+);
+eq(
+  runFeedbackAction([], entry, {
+    write: () => {
+      throw new Error('QuotaExceededError');
+    },
+  }),
+  { ok: false, reason: 'storage' },
+  'F9i 抛异常也返回明确写入失败',
+);
+
+const longEntry = createFeedbackEntry(
+  draft({ title: '测试', detail: '测'.repeat(2000), attachContext: false }),
+  { id: 'long' },
+);
+ok(
+  isIssueUrlTooLong(buildIssueUrl(longEntry)),
+  'F9j 合法长度中文正文能触发 URL 上限',
+);
+eq(
+  validateFeedbackDraft(draft({ detail: longEntry.detail })),
+  null,
+  'F9k 超长 URL 的正文仍是合法输入',
+);
+let longWrites = 0;
+const longOptions = {
+  write: () => {
+    longWrites += 1;
+    return true;
+  },
+  openIssue: () => {
+    forbiddenOpens += 1;
+  },
+};
+eq(
+  runFeedbackAction([], longEntry, longOptions),
+  { ok: false, reason: 'url-too-long' },
+  'F9l 新留言拒绝超长链接',
+);
+eq(
+  runFeedbackAction([longEntry], longEntry, longOptions),
+  { ok: false, reason: 'url-too-long' },
+  'F9m 已保存记录不能绕过长度检查',
+);
+eq(longWrites, 0, 'F9n 超长链接不写入虚假提交次数');
+eq(forbiddenOpens, 0, 'F9o 超长链接从任一入口都不会打开');
+const localLong = runFeedbackAction([], longEntry, { write });
+ok(
+  localLong.ok && localLong.issueUrl === null,
+  'F9p 超长链接不妨碍本机保存及导出',
+);
+eq(
+  parseFeedbackEntries(stored)[0].detail,
+  longEntry.detail,
+  'F9q 长留言本机存储完整',
+);
+
+const popupFailure = runFeedbackAction([], entry, {
+  write,
+  openIssue: () => {
+    throw new Error('blocked');
+  },
+});
+ok(
+  popupFailure.ok && popupFailure.openFailed && !!popupFailure.issueUrl,
+  'F9r 打开抛错时仍保留已保存记录及手动链接',
+);
+const nullPopup = runFeedbackAction([], entry, {
+  write,
+  openIssue: () => null,
+});
+ok(
+  nullPopup.ok && !!nullPopup.issueUrl,
+  'F9s noopener 返回 null 时仍提供手动链接',
+);
+eq(
+  persistFeedbackEntries([], () => false),
+  false,
+  'F9t 清空写入失败不宣告成功',
+);
+ok(persistFeedbackEntries([], write), 'F9u 清空可正常持久化');
+eq(parseFeedbackEntries(stored), [], 'F9v 清空成功刷新后无旧记录');
 
 // ---------- 汇总 ----------
 console.log(`\n意见反馈逻辑测试：通过 ${passed} 项，失败 ${failed} 项`);

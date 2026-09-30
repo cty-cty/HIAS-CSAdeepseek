@@ -5,7 +5,8 @@
  * 还要求离线单文件版完全可用（禁止外部脚本）。所以留言采用「本机留档 + 一键
  * 带到 GitHub Issue 提交」的方案：
  * - 内容只写入本机 localStorage（hias-feedback-v1），不会自动上传；
- * - “提交”= 打开预填好标题与正文的 GitHub 新建 Issue 页面，由用户自己确认提交。
+ * - “提交”= 留档成功后打开预填好的 GitHub 新建 Issue 页面，由用户自己确认创建。
+ *   打开时链接已将标题、正文、联系方式与所选环境信息发送给 GitHub；Create 才创建公开 Issue。
  * 这样线上版与离线版共用同一套逻辑，且不需要任何后端或第三方服务。
  */
 
@@ -276,7 +277,7 @@ export function formatFeedbackEntryText(entry: FeedbackEntry): string {
 
 export function formatFeedbackEntryStatus(entry: FeedbackEntry): string {
   if (!entry.lastSubmittedAt) return '尚未提交';
-  return `已打开提交页 ${entry.submittedCount} 次 · 最近 ${formatFeedbackTime(
+  return `已尝试打开提交页 ${entry.submittedCount} 次 · 最近 ${formatFeedbackTime(
     entry.lastSubmittedAt,
   )}`;
 }

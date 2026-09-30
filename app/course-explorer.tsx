@@ -146,7 +146,6 @@ import {
   FEEDBACK_MAX_ENTRIES,
   FEEDBACK_MAX_TITLE,
   FEEDBACK_STORAGE_KEY,
-  buildIssueUrl,
   createFeedbackEntry,
   feedbackExportFileName,
   formatFeedbackEntryStatus,
@@ -154,17 +153,14 @@ import {
   formatFeedbackExport,
   formatFeedbackTime,
   getFeedbackCategory,
-  isIssueUrlTooLong,
-  markFeedbackSubmitted,
   parseFeedbackEntries,
   removeFeedbackEntry,
-  serializeFeedbackEntries,
-  upsertFeedbackEntry,
   validateFeedbackDraft,
   type FeedbackContext,
   type FeedbackDraft,
   type FeedbackEntry,
 } from './feedback';
+import { persistFeedbackEntries, runFeedbackAction } from './feedback-actions';
 import {
   buildCandidates,
   collectConfirmedDegreeNames,
@@ -1442,16 +1438,6 @@ export default function CourseExplorer({
     reportPersistFailure,
     storageReady,
   ]);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    // 与其余持久化一致走 safeSetItem：配额超限或存储被禁用时不抛异常、不白屏，
-    // 只上报一次持久化失败；序列化仍保留“排序 + 截断到上限”。
-    const saved = serializeFeedbackEntries(feedbackEntries);
-    if (!safeSetItem(FEEDBACK_STORAGE_KEY, saved)) {
-      reportPersistFailure();
-    }
-  }, [feedbackEntries, reportPersistFailure, storageReady]);
 
   // 复制成功提示 2 秒后自动消失（保留列表里的留言本身）。
   useEffect(() => {
@@ -3149,9 +3135,8 @@ export default function CourseExplorer({
   function saveFeedbackLocally() {
     const entry = prepareFeedbackEntry();
     if (!entry) return;
-    setFeedbackEntries((current) => upsertFeedbackEntry(current, entry));
+    if (!performFeedbackAction(entry, false)) return;
     setFeedbackDraft({ ...EMPTY_FEEDBACK_DRAFT });
-    setFeedbackError('');
     setFeedbackMessage(
       `留言已保存在本机（${formatFeedbackTime(
         entry.createdAt,
@@ -3163,38 +3148,55 @@ export default function CourseExplorer({
   function submitFeedbackToGitHub() {
     const entry = prepareFeedbackEntry();
     if (!entry) return;
-    const url = buildIssueUrl(entry);
-    if (isIssueUrlTooLong(url)) {
-      setFeedbackError(
-        '留言内容较长，提交链接超出浏览器长度限制；请改用“复制留言内容”，粘贴到 GitHub Issue 里提交。',
-      );
-      setFeedbackMessage('');
-      return;
-    }
-    openFeedbackUrl(entry, url);
+    if (!performFeedbackAction(entry, true)) return;
     setFeedbackDraft({ ...EMPTY_FEEDBACK_DRAFT });
   }
 
-  function openFeedbackUrl(entry: FeedbackEntry, url: string) {
-    // 注意：带 noopener 时 window.open 按规范返回 null，不能靠返回值判断是否被拦截，
-    // 所以两种情况下都给出“手动打开提交页”的兜底链接。
-    window.open(url, '_blank', 'noopener,noreferrer');
-    const submitted = markFeedbackSubmitted(entry, new Date());
-    setFeedbackEntries((current) =>
-      current.some((item) => item.id === entry.id)
-        ? current.map((item) => (item.id === entry.id ? submitted : item))
-        : upsertFeedbackEntry(current, submitted),
+  function reportFeedbackPersistFailure() {
+    setFeedbackError(
+      '留言未能写入本机存储（可能空间已满或已被禁用），表单和列表均已保留。请先复制当前留言，或用“导出全部留言”备份列表中的记录；“数据管理”的选课备份不包含留言。',
     );
-    setLastFeedbackUrl(url);
+    setFeedbackMessage('');
+  }
+
+  function performFeedbackAction(entry: FeedbackEntry, submit: boolean): boolean {
+    setLastFeedbackUrl('');
+    const result = runFeedbackAction(feedbackEntries, entry, {
+      write: (value) => safeSetItem(FEEDBACK_STORAGE_KEY, value),
+      openIssue: submit
+        ? (url) => {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
+        : undefined,
+    });
+    if (!result.ok) {
+      if (result.reason === 'storage') {
+        reportFeedbackPersistFailure();
+      } else {
+        setFeedbackError(
+          '留言生成的提交链接过长，未打开 GitHub。请复制这条留言，或保存后导出 Markdown，再从“查看已有反馈与处理进度”进入 GitHub 新建 Issue。',
+        );
+        setFeedbackMessage('');
+      }
+      return false;
+    }
+    setFeedbackEntries(result.entries);
+    setLastFeedbackUrl(result.issueUrl ?? '');
     setFeedbackError('');
-    setFeedbackMessage(
-      '已打开 GitHub 提交页：确认标题与正文后点“Create”即可提交；若没有自动打开，请点下面的“手动打开 GitHub 提交页”。',
-    );
+    if (result.issueUrl) {
+      // noopener 下返回 null 不等于被拦截，因此始终提供手动链接。
+      setFeedbackMessage(
+        result.openFailed
+          ? '留言已保存在本机，但未能打开 GitHub。请点下面的“手动打开 GitHub 提交页”。'
+          : '留言已保存在本机，并已尝试打开 GitHub 提交页。确认标题与正文后点“Create”即可创建 Issue；若没有打开，请使用下面的手动链接。',
+      );
+    }
+    return true;
   }
 
   /** 重新打开某条已保存留言的 GitHub 提交页。 */
   function reopenFeedbackIssue(entry: FeedbackEntry) {
-    openFeedbackUrl(entry, buildIssueUrl(entry));
+    performFeedbackAction(entry, true);
   }
 
   async function copyFeedbackText(
@@ -3223,13 +3225,28 @@ export default function CourseExplorer({
 
   function deleteFeedbackEntry(id: string) {
     if (!window.confirm('删除本机保留的这条留言？删除后无法恢复。')) return;
-    setFeedbackEntries((current) => removeFeedbackEntry(current, id));
+    const nextEntries = removeFeedbackEntry(feedbackEntries, id);
+    if (
+      !persistFeedbackEntries(nextEntries, (value) =>
+        safeSetItem(FEEDBACK_STORAGE_KEY, value),
+      )
+    ) {
+      reportFeedbackPersistFailure();
+      return;
+    }
+    setFeedbackEntries(nextEntries);
     setFeedbackError('');
     setFeedbackMessage('已删除本机保留的这条留言。');
   }
 
   function clearAllFeedback() {
     if (!window.confirm('清空本机保留的全部留言？删除后无法恢复。')) return;
+    if (
+      !persistFeedbackEntries([], (value) => safeSetItem(FEEDBACK_STORAGE_KEY, value))
+    ) {
+      reportFeedbackPersistFailure();
+      return;
+    }
     setFeedbackEntries([]);
     setFeedbackError('');
     setFeedbackMessage('已清空本机保留的留言。');
@@ -5093,7 +5110,7 @@ export default function CourseExplorer({
                     <h2>意见反馈 / 留言</h2>
                     <div className="section-description">
                       课程数据、培养方案口径或使用体验有问题，都可以在这里留言。留言先保存在本机浏览器，再由你确认后带到 GitHub Issue
-                      提交；本站是纯静态页面，没有服务器，不会自动上传任何内容。
+                      提交；本站没有接收留言的后端，填写和本机保存不会自动上传留言。
                     </div>
                   </div>
 
@@ -5272,7 +5289,7 @@ export default function CourseExplorer({
                           账号：点“提交到 GitHub Issue”会打开预填好标题与正文的新建
                           Issue
                           页面，最后一步的“Create”由你自己确认。没有账号时可以“只保存到本机”，再导出
-                          Markdown 发给维护者；正文不会自动上传，也不要用它提交身份证号、学号、手机号等敏感信息。
+                          Markdown 发给维护者。打开 GitHub 提交页时，标题、正文、联系方式和勾选的环境信息会通过链接发送给 GitHub；点击“Create”后才会创建公开 Issue。不要填写身份证号、学号、手机号等敏感信息。
                         </span>
                       </div>
                     </article>
